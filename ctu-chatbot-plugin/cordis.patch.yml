@@ -2,8 +2,8 @@
 # The portal authenticates with a browser session cookie, which this plugin
 # reads from the environment variable named by `cookieEnv` at request time.
 - insert:
-    - id: cityu-portal-llm
-      name: '@local/cityu-portal-llm'
+    - id: ctu-chatbot-plugin
+      name: 'ctu-chatbot-plugin'
       config:
         cookieEnv: CITYU_PORTAL_COOKIE
         contextWindow: 32000

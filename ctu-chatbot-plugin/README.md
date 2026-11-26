@@ -1,4 +1,4 @@
-# @local/cityu-portal-llm
+# ctu-chatbot-plugin
 
 DeepSeek Harness LLM provider for the CityUHK IT-portal chatbot.
 

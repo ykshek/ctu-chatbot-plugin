@@ -1,7 +1,7 @@
 {
-  "name": "@local/cityu-portal-llm",
-  "version": "0.1.0",
-  "private": true,
+  "name": "ctu-chatbot-plugin",
+  "version": "1.0.0",
+  "private": false,
   "description": "CityUHK IT-portal chatbot as a text-only DeepSeek Harness LLM provider.",
   "license": "MIT",
   "type": "module",

@@ -15,7 +15,7 @@
  * The bundle imports no `@deepseek-ai/*` package at runtime, so it resolves
  * from the profile's own node_modules without a duplicate harness install.
  *
- * @module @local/cityu-portal-llm
+ * @module ctu-chatbot-plugin
  */
 
 import { CityuPortalAdapter } from './lib/adapter.js'

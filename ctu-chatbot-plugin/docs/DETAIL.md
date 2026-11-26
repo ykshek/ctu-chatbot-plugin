@@ -86,8 +86,8 @@ The plugin reads its config from the bundle patch and/or the profile's
    defaults the omitted fields):
 
    ```yaml
-   - id: cityu-portal-llm
-     name: "@local/cityu-portal-llm"
+   - id: ctu-chatbot-plugin
+     name: "ctu-chatbot-plugin"
      config:
        cookie: '<cookie>'
        cookieEnv: CITYU_PORTAL_COOKIE
