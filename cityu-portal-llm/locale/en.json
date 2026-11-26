@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "CityUHK portal chatbot",
+    "description": "Answers questions through CityUHK's IT-portal knowledge-base chatbot.",
+    "detail": "docs/DETAIL.md"
+  }
+}
