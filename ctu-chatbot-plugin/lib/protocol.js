@@ -177,6 +177,49 @@ export async function* chatStream({ baseURL, cookie, id, model, qst, signal }) {
 }
 
 /**
+ * Read the signed-in account's quota for one model.
+ *
+ * The portal reports quota per model, not per account: `model` selects which
+ * one, and the answer carries that model's allowance (`quota`) and what is left
+ * (`quotaLeft`). This is the same request the portal's own dashboard widget
+ * issues, so it needs the same browser session cookie as a chat call.
+ * @param {object} request
+ * @param {string} request.baseURL - root of the `chatbot` module, not `kbchatbot`.
+ * @param {string} request.cookie
+ * @param {string} request.model - wire model key, or `LAST` for the most recent one.
+ * @param {AbortSignal} [request.signal]
+ * @returns {Promise<Record<string, unknown>>}
+ */
+export async function getUsage({ baseURL, cookie, model, signal }) {
+  const response = await fetch(`${baseURL}/getusage`, {
+    method: 'POST',
+    redirect: 'error',
+    signal,
+    headers: {
+      ...attributionHeaders(),
+      accept: 'application/json, text/plain, */*',
+      'content-type': 'application/json',
+      cookie,
+    },
+    // `getusage` ignores the conversation fields; the widget sends its own
+    // option object, and `id` may stay empty because no conversation is read.
+    body: JSON.stringify({ id: '', model, style: '1', sessionOnly: false, qst: 'Hi' }),
+  })
+  const text = await response.text()
+  if (!response.ok) throw httpFailure(response.status, text)
+  if (looksLikeLoginPage(response, text)) throw loginPageFailure()
+  try {
+    return JSON.parse(text)
+  } catch (cause) {
+    throw new CityuPortalError(
+      'CityUHK portal returned a non-JSON quota response',
+      'MALFORMED_RESPONSE',
+      { status: response.status, cause },
+    )
+  }
+}
+
+/**
  * Detect the sign-in page an unauthenticated request is bounced to. The portal
  * API answers JSON/text; HTML means the session cookie went stale and the
  * request followed the SSO flow instead.
@@ -188,6 +231,18 @@ function looksLikeLoginPage(response, body) {
   const contentType = response.headers.get('content-type') ?? ''
   if (/text\/html/iu.test(contentType)) return true
   return /<!doctype html|<html[\s>]/iu.test(body.slice(0, 512))
+}
+
+/**
+ * Detect the portal's edge filter (Incapsula) block page. It answers HTML with
+ * an incident id even for API calls, so a stale or filtered cookie looks like a
+ * generic failure unless it is named: the fix is a fresh Cookie header, not a
+ * retry and not a server-error report.
+ * @param {string} body
+ * @returns {boolean}
+ */
+function looksLikeBlockPage(body) {
+  return /incident_id|_incapsula_resource/iu.test(body.slice(0, 4096))
 }
 
 /** @returns {CityuPortalError} */
@@ -209,6 +264,14 @@ function httpFailure(status, body) {
   const detail = body.trim().slice(0, 300)
   const suffix = detail === '' ? '' : `: ${detail}`
   if (status === 401 || status === 403) {
+    if (looksLikeBlockPage(body)) {
+      return new CityuPortalError(
+        'CityUHK portal\'s edge filter blocked the request. Sign in to the portal again and '
+        + 'paste a fresh Cookie header value, including the incap_ses_* and reese84 cookies.',
+        'INVALID_CREDENTIAL',
+        { status },
+      )
+    }
     return new CityuPortalError(
       'CityUHK portal rejected the session cookie. Sign in to the portal again and copy a fresh Cookie header value.',
       'INVALID_CREDENTIAL',
