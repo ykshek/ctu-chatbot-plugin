@@ -292,9 +292,9 @@ export class CityuPortalAdapter {
 
   /**
    * Resolve the session cookie: an explicit config value first, then the
-   * credential the settings page stored, then the named environment variable.
-   * Resolved per request, so a cookie saved in Settings takes effect on the
-   * next call without a restart.
+   * credential the bundle page stored, then the named environment variable.
+   * Resolved per request, so a cookie saved on the bundle page takes effect on
+   * the next call without a restart.
    * @returns {Promise<string>}
    */
   async resolveCookie() {
@@ -309,8 +309,8 @@ export class CityuPortalAdapter {
     const fromEnv = typeof envValue === 'string' ? normalizeCookie(envValue) : ''
     if (fromEnv !== '') return fromEnv
     throw new CityuPortalError(
-      `No CityUHK portal session cookie is configured. Paste one into the plugin's settings page `
-      + `(Settings → Plugins → CityU chatbot), or set the ${this.options.cookieEnv} environment variable.`,
+      `No CityUHK portal session cookie is configured. Paste one into the plugin's settings `
+      + `(Plugins → Installed plugins → CityUHK portal chatbot), or set the ${this.options.cookieEnv} environment variable.`,
       'MISSING_CREDENTIAL',
     )
   }

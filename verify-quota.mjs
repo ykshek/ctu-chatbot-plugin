@@ -112,7 +112,7 @@ function check(label, condition, detail) {
   check('catalog from the response', answer.models.length === 4, answer.models)
 }
 
-// 4. Cookie from the credential reader (settings page path).
+// 4. Cookie from the credential reader (bundle page path).
 {
   let reads = 0
   const adapter = new CityuPortalAdapter(
@@ -134,7 +134,7 @@ function check(label, condition, detail) {
     check('throws when unconfigured', false)
   } catch (error) {
     check('throws MISSING_CREDENTIAL', error.code === 'MISSING_CREDENTIAL', error.code)
-    check('message names the settings page', /settings page/iu.test(error.message), error.message.slice(0, 120))
+    check('message names the bundle page', /Plugins → Installed plugins → CityUHK portal chatbot/u.test(error.message), error.message.slice(0, 140))
   }
 }
 

@@ -3,7 +3,8 @@
  *
  * Two surfaces, both owned by this plugin:
  *
- *   1. a page under Settings → Plugins, where the portal session cookie is
+ *   1. the configuration of its own bundle page in Plugins → Installed
+ *      plugins → CityUHK portal chatbot, where the portal session cookie is
  *      pasted and every model's remaining quota is listed;
  *   2. a composer-dock pill showing the selected model's remaining quota, so
  *      the figure sits beside the harness performance readings.
@@ -142,7 +143,7 @@ window.__ModuleLoader__.load({
     async function callRemote(ctx, method, argument) {
       const service = ctx.get(`remote.${SERVICE_KEY}`)
       if (service === undefined) {
-        return { ok: false, error: { message: 'The CityU chatbot host service is not available.' } }
+        return { ok: false, error: { message: 'The CityUHK portal chatbot host service is not available.' } }
       }
       try {
         return argument === undefined
@@ -254,10 +255,14 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * Settings → Plugins → CityU chatbot: store the session cookie and read
-     * every model's remaining quota.
+     * Plugins → Installed plugins → CityUHK portal chatbot: the bundle page's
+     * configuration section, which stores the session cookie and reads every
+     * model's remaining quota.
+     *
+     * The page draws the title, icon, and crumb itself, so this entry renders
+     * the form alone. `view` is always `page` for a bundle's configuration.
      */
-    function SettingsPage({ call, t }) {
+    function PortalSettings({ call, t }) {
       const [status, setStatus] = useState(null)
       const [cookie, setCookie] = useState('')
       const [busy, setBusy] = useState(false)
@@ -359,7 +364,7 @@ window.__ModuleLoader__.load({
      *
      * Hidden unless the session's model selection belongs to this provider, so
      * it never claims a quota for a model it does not serve. The full breakdown
-     * lives in the settings page; one reading keeps the dock quiet.
+     * lives on the plugin's bundle page; one reading keeps the dock quiet.
      */
     function QuotaPill({ useProjection, call, t }) {
       const projection = useProjection('modelSelection')
@@ -442,14 +447,15 @@ window.__ModuleLoader__.load({
         ctx.effect(() => dispose, 'ctu-chatbot-plugin: quota Remote mount')
         const call = (method, argument) => callRemote(ctx, method, argument)
 
-        ctx.slots.inject('settings.plugins.tab', () => ctx.slots.register({
-          name: 'settings.plugins.tab',
-          id: 'ctu-chatbot',
-          order: 30,
-          label: () => 'CityU chatbot',
+        // The bundle's own configuration belongs on its bundle page, not in
+        // Settings: keyed by this package name, it renders between the page's
+        // description and its rows while the Plugins panel is mounted.
+        ctx.slots.inject('plugins.bundle.config', () => ctx.slots.register({
+          name: 'plugins.bundle.config',
+          key: PACKAGE,
           locale: NS,
           inject: () => ({ call }),
-        }, SettingsPage))
+        }, PortalSettings))
 
         ctx.slots.inject('conversation.composer.dock', () => ctx.slots.register({
           name: 'conversation.composer.dock',

@@ -234,8 +234,8 @@ export class CtuQuotaService extends TypertRemoteService {
 export function apply(ctx, config) {
   const options = resolveOptions(config)
   const adapter = new CityuPortalAdapter(options, {
-    // Read through the credential seam per request, so a cookie saved in
-    // Settings reaches the next call without restarting the plugin.
+    // Read through the credential seam per request, so a cookie saved on the
+    // plugin's bundle page reaches the next call without restarting the plugin.
     credentialReader: async () => (await ctx.credentials.resolve(options.cookieEnv))?.value,
   })
   ctx.llm.registerAdapter([PROVIDER_ID], adapter)
