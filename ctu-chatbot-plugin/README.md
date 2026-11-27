@@ -2,9 +2,19 @@
 
 DeepSeek Harness LLM provider for the CityUHK IT-portal chatbot.
 
-Install the package directory through the running GUI's **Plugins → Add plugin**
-(which both installs the package and selects the bundle), or with
-`plugin_manager` `action: install_bundle` and this directory as `target`.
+## Install
+
+Add the package `ctu-chatbot-plugin` through the running GUI's
+**Plugins → Add plugin**; installing a plugin also selects its bundle. The same
+install headless:
+
+```bash
+dsh plugin --profile web add ctu-chatbot-plugin
+```
+
+To run a local checkout instead of the published package, pass its package
+directory (`ctu-chatbot-plugin/`) as the add target, or use `plugin_manager`
+`action: install_bundle` with that directory as `target`.
 
 The portal authenticates with a browser session cookie. After installing, open
 **Settings → Plugins → CityU chatbot**, paste the `Cookie` request header from a

@@ -3,7 +3,22 @@
   "version": "1.0.1",
   "private": false,
   "description": "CityUHK IT-portal chatbot as a text-only DeepSeek Harness LLM provider.",
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "cityu",
+    "llm-provider",
+    "chatbot"
+  ],
+  "author": "ykshek <hms.starryfish@gmail.com>",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ykshek/ctu-chatbot-plugin.git"
+  },
+  "homepage": "https://github.com/ykshek/ctu-chatbot-plugin#readme",
+  "bugs": "https://github.com/ykshek/ctu-chatbot-plugin/issues",
   "type": "module",
   "main": "index.js",
   "exports": {
@@ -22,10 +37,12 @@
     "icon.svg",
     "cordis.patch.yml",
     "docs",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "engines": {
-    "node": ">=22"
+    "node": ">=22",
+    "dsh": "^0.2.2-rc.5"
   },
   "dsh": {
     "bundle": {
