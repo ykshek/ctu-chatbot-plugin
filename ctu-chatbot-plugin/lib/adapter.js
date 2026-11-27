@@ -13,8 +13,10 @@
 
 import { randomUUID } from 'node:crypto'
 import { CityuPortalError } from './errors.js'
+import { estimateTokens } from './estimate.js'
 import { findModel, MODELS, wireModel } from './models.js'
 import { chatStream, normalizeCookie, startNewConversation } from './protocol.js'
+import { fetchAllQuotas, fetchQuota } from './quota.js'
 
 /** Role labels used when flattening the message history into one question. */
 const ROLE_LABELS = Object.freeze({
@@ -105,6 +107,7 @@ function isRedirectFailure(error) {
 /**
  * @typedef {object} AdaptedOptions
  * @property {string} baseURL
+ * @property {string} quotaBaseURL
  * @property {string} cookie
  * @property {string} cookieEnv
  * @property {string} sessionId
@@ -117,10 +120,13 @@ function isRedirectFailure(error) {
 export class CityuPortalAdapter {
   /**
    * @param {AdaptedOptions} options - normalized plugin config.
+   * @param {{ credentialReader?: () => Promise<string | undefined> }} [auth] - reads the stored session cookie.
    */
-  constructor(options) {
+  constructor(options, auth = {}) {
     /** @type {AdaptedOptions} */
     this.options = options
+    /** Reads the cookie the settings page stored; absent in a headless install. */
+    this.credentialReader = auth.credentialReader
     /** Stable conversation id for this adapter generation. */
     this.sessionId = options.sessionId !== '' ? options.sessionId : randomUUID()
   }
@@ -207,7 +213,7 @@ export class CityuPortalAdapter {
 
     try {
       signal.throwIfAborted()
-      const cookie = this.resolveCookie()
+      const cookie = await this.resolveCookie()
       const question = buildQuestion(options, this.options)
       if (question === '') {
         throw new CityuPortalError(
@@ -246,6 +252,16 @@ export class CityuPortalAdapter {
         )
       }
       yield { type: 'block-end', index: 0, block: { type: 'text', text: answer } }
+      // The portal reports no prompt or completion counts, so the harness would
+      // leave the Usage pill empty and the decode-speed figure blank. Emitting
+      // an estimate before the terminal chunk fills both; it is labelled as an
+      // estimate everywhere it is shown.
+      const inputTokens = estimateTokens(question)
+      const outputTokens = estimateTokens(answer)
+      yield {
+        type: 'usage',
+        usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens },
+      }
       yield { type: 'finish', reason: { kind: 'stop' } }
     } catch (error) {
       if (error instanceof CityuPortalError) throw error
@@ -275,22 +291,55 @@ export class CityuPortalAdapter {
   }
 
   /**
-   * Resolve the session cookie from literal config first, then the named
-   * environment variable. Read per request so a changed environment or
-   * reloaded config takes effect without rebuilding the adapter.
-   * @returns {string}
+   * Resolve the session cookie: an explicit config value first, then the
+   * credential the settings page stored, then the named environment variable.
+   * Resolved per request, so a cookie saved in Settings takes effect on the
+   * next call without a restart.
+   * @returns {Promise<string>}
    */
-  resolveCookie() {
+  async resolveCookie() {
     const direct = normalizeCookie(this.options.cookie)
     if (direct !== '') return direct
+    if (this.credentialReader !== undefined) {
+      const stored = await this.credentialReader()
+      const fromStore = typeof stored === 'string' ? normalizeCookie(stored) : ''
+      if (fromStore !== '') return fromStore
+    }
     const envValue = process.env[this.options.cookieEnv]
     const fromEnv = typeof envValue === 'string' ? normalizeCookie(envValue) : ''
     if (fromEnv !== '') return fromEnv
     throw new CityuPortalError(
-      `No CityUHK portal session cookie is configured. Set the ${this.options.cookieEnv} `
-      + 'environment variable (or the plugin\'s "cookie" option) to the Cookie header value '
-      + 'sent by a signed-in portal browser tab.',
+      `No CityUHK portal session cookie is configured. Paste one into the plugin's settings page `
+      + `(Settings → Plugins → CityU chatbot), or set the ${this.options.cookieEnv} environment variable.`,
       'MISSING_CREDENTIAL',
     )
+  }
+
+  /**
+   * Read one model's quota through this adapter's credentials.
+   * @param {string} model - wire model key.
+   * @param {AbortSignal} [signal]
+   * @returns {Promise<import('./quota.js').QuotaReading>}
+   */
+  async readQuota(model, signal) {
+    return fetchQuota({
+      baseURL: this.options.quotaBaseURL,
+      cookie: await this.resolveCookie(),
+      model,
+      signal,
+    })
+  }
+
+  /**
+   * Read every model's quota.
+   * @param {AbortSignal} [signal]
+   * @returns {Promise<Awaited<ReturnType<typeof fetchAllQuotas>>>}
+   */
+  async readAllQuotas(signal) {
+    return fetchAllQuotas({
+      baseURL: this.options.quotaBaseURL,
+      cookie: await this.resolveCookie(),
+      signal,
+    })
   }
 }
