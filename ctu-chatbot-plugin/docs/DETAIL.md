@@ -3,6 +3,11 @@
 Adds the City University of Hong Kong IT-portal chatbot (`www.cityu.edu.hk/portal`)
 to DeepSeek Harness as the text-only LLM provider `cityu-portal`.
 
+**Configure it here.** This window belongs to the plugin's own page
+(**Plugins → Installed plugins → CityUHK portal chatbot**). Below this document
+the page holds the **Portal session** field, where the portal cookie is pasted,
+and the table of every model's remaining quota.
+
 ## What it actually is
 
 The portal chatbot is **not** an OpenAI-compatible model endpoint. It is a
@@ -70,18 +75,45 @@ The plugin reads its config from the bundle patch and/or the profile's
 
 ### Supplying the session cookie
 
-Sign in to `https://www.cityu.edu.hk/portal/category/5`, open DevTools →
-Network, and copy the **`Cookie` request header** of any portal request.
+The portal authenticates with the browser session it sets when you sign in, so
+the plugin needs the **`Cookie` request header** that the browser sends with
+portal requests.
 
-**Settings page (normal path).** Open **Settings → Plugins → CityU chatbot**,
-paste the value, and press **Save**. The plugin stores it as a credential
-record rather than in configuration, verifies it against the portal, and
-reports whether it is configured. A saved cookie reaches the next request
-without a restart, and the value never appears in `cordis.patch.yml`.
+#### Copy the cookie from a browser
 
-Paste the whole header value: besides the portal's own authentication cookie it
-carries the edge filter's `incap_ses_*` and `reese84` cookies, and a request
-missing those is rejected before the portal sees it.
+1. Sign in at `https://www.cityu.edu.hk/portal/category/5`.
+2. Open the browser's developer tools.
+3. Choose the **Network** tab and reload the page so the portal requests appear.
+4. Select a finished request to `www.cityu.edu.hk` — the page itself or one of
+   its `api/module/...` calls. If an entry says *Provisional headers are shown*,
+   reload and pick another one.
+5. In the request's request headers, find **Cookie** and copy its whole value.
+   Do not copy a `Set-Cookie` response header.
+
+Where that panel lives:
+
+- **Chrome, Edge, and other Chromium browsers:** `F12`, or `Ctrl+Shift+I`
+  (`⌥⌘I` on macOS) → **Network** → **Headers** → **Request Headers** →
+  **Cookie**.
+- **Firefox:** `F12`, or `Ctrl+Shift+I` (`⌥⌘I` on macOS) → **Network** →
+  **Headers** → **Request Headers** → **Cookie**.
+- **Safari:** enable **Settings → Advanced → Show features for web
+  developers**, then **Develop → Show Web Inspector** → **Network** →
+  **Headers** → **Request** → **Cookie**.
+
+Paste the whole header value rather than a single cookie: besides the portal's
+own authentication cookie it carries the edge filter's `incap_ses_*` and
+`reese84` cookies, and a request missing those is rejected before the portal
+sees it. The value can be several kilobytes long; paste all of it.
+
+#### Paste it on the plugin's page
+
+**Bundle page (normal path).** Open **Plugins → Installed plugins → CityUHK
+portal chatbot**, paste the value into the page's **Portal session** field, and
+press **Save**. The plugin stores it as a credential record rather than in
+configuration, verifies it against the portal, and reports whether it is
+configured. A saved cookie reaches the next request without a restart, and the
+value never appears in `cordis.patch.yml`.
 
 **Environment (headless installs).** Export it in the environment that starts
 `dsh web`. The same name doubles as the credential reference, so a stored value
@@ -114,8 +146,8 @@ dashboard carries its own allowance. The plugin reads it from
 `api/module/chatbot/getusage` by naming the model in the request body, which is
 the same request the portal's own dashboard widget makes.
 
-- **Settings → Plugins → CityU chatbot** lists every model with its remaining
-  quota and reset date, refreshed on demand.
+- **Plugins → Installed plugins → CityUHK portal chatbot** lists every model
+  with its remaining quota and reset date, refreshed on demand.
 - The **composer dock** gains a `Quota: <left> / <quota>` pill for the selected
   model, refreshed every 30 seconds. It is hidden unless the session's model
   selection belongs to this provider, so it never claims a quota for a model it
@@ -161,8 +193,8 @@ pill and the decode-speed figure show.
 
 - `index.js` — Cordis plugin entry (`name`, `inject`, `apply`) and the
   `CtuQuotaService` that publishes the quota Remote methods.
-- `client.js` — Web client half: the Settings → Plugins page and the composer
-  dock quota pill.
+- `client.js` — Web client half: the bundle page's configuration section and
+  the composer dock quota pill.
 - `lib/adapter.js` — the duck-typed adapter: question flattening, session claim,
   stream translation, usage estimate, quota reads.
 - `lib/protocol.js` — HTTP transport, attribution header, cookie normalization,
