@@ -14,17 +14,13 @@
  */
 
 import { CityuPortalAdapter } from './ctu-chatbot-plugin/lib/adapter.js'
+import { resolveOptions } from './ctu-chatbot-plugin/lib/config.js'
 
-const adapter = new CityuPortalAdapter({
-  baseURL: 'https://www.cityu.edu.hk/portal/api/module/kbchatbot',
-  cookie: '', // empty -> read from env
-  cookieEnv: 'CITYU_PORTAL_COOKIE',
-  sessionId: '', // empty -> randomUUID()
-  contextWindow: 32000,
-  requestTimeoutMs: 120000,
-  maxQuestionChars: 24000,
-  includeSystemPrompt: false,
-})
+// Defaults supply the endpoint, context window, deadlines, and the quota
+// endpoint, so this stays correct as options are added.
+const adapter = new CityuPortalAdapter(resolveOptions({
+  cookieEnv: 'CITYU_PORTAL_COOKIE', // cookie stays empty, so it is read from the environment
+}))
 
 console.log('adapter.sessionId (should be a UUID):', adapter.sessionId)
 
