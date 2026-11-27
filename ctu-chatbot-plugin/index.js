@@ -119,6 +119,13 @@ const DESCRIPTORS = Object.freeze([
 ])
 
 /**
+ * Reflection model for a package that publishes no generated Typert artifact.
+ * The registry stores it beside the invocation descriptors; the API Gateway
+ * dispatches from the descriptors alone.
+ */
+const REFLECTION = Object.freeze({ services: [], events: [], objects: [] })
+
+/**
  * Publish the account's per-model portal quota to the Web client.
  *
  * Quota cannot ride a session projection: projections fold session events only,
@@ -240,14 +247,26 @@ export function apply(ctx, config) {
   })
   ctx.llm.registerAdapter([PROVIDER_ID], adapter)
   ctx.plugin(CtuQuotaService, { adapter, cookieEnv: options.cookieEnv })
-  // The registry allows one registration per package and throws on a repeat.
-  // A reload normally disposes the previous generation first, but a generation
-  // that is still live already publishes exactly these descriptors, so adopt it
-  // instead of failing the whole plugin over the duplicate.
+  // The API Gateway dispatches from `typert.local`, the registry a package
+  // publishes its invocation descriptors into; `typert.remotes` is the
+  // separate client/offline registry and serves no route. The package ships no
+  // generated Typert artifact, so it registers its hand-written descriptors
+  // directly and publishes an empty reflection model.
   ctx.effect(() => {
-    const held = ctx.typert.remotes.list().some(entry => entry.service === SERVICE_KEY)
+    // The registry allows one registration per package and throws on a repeat.
+    // A reload normally disposes the previous generation first, but a generation
+    // that is still live already publishes exactly these descriptors, so adopt it
+    // instead of failing the whole plugin over the duplicate.
+    const held = DESCRIPTORS.every(descriptor =>
+      ctx.typert.local.get(`${descriptor.namespace}/${descriptor.method}`)?.id === descriptor.id)
     if (held) return () => {}
-    return ctx.typert.remotes.register({ package: PACKAGE, descriptors: DESCRIPTORS })
+    return ctx.typert.register({
+      package: PACKAGE,
+      face: 'host',
+      schemas: [],
+      model: REFLECTION,
+      invocations: DESCRIPTORS,
+    })
   }, 'ctu-chatbot-plugin: quota Remote methods')
   ctx.logger?.info?.(
     `llm-cityu-portal: registered provider "${PROVIDER_ID}" with `
