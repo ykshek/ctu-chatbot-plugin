@@ -12,9 +12,8 @@
 import { createServer } from 'node:http'
 import { gzipSync } from 'node:zlib'
 import { strict as assert } from 'node:assert'
-import { CityuPortalAdapter } from './cityu-portal-llm/lib/adapter.js'
-import { resolveOptions } from './cityu-portal-llm/lib/config.js'
-import { buildQuestion } from './cityu-portal-llm/lib/adapter.js'
+import { buildQuestion, CityuPortalAdapter } from './ctu-chatbot-plugin/lib/adapter.js'
+import { resolveOptions } from './ctu-chatbot-plugin/lib/config.js'
 
 const LLM = 'file:///var/home/linuxbrew/.linuxbrew/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-llm/lib/index.js'
 const FAILURE = 'file:///var/home/linuxbrew/.linuxbrew/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-llm/lib/types/adapter-failure.js'
@@ -166,7 +165,14 @@ await check('happy path streams one text block and stops', async () => {
   assert.equal(end.block.type, 'text')
   assert.equal(end.block.text, ANSWER, 'block-end carries the complete answer')
   assert.deepEqual(chunks.at(-1), { type: 'finish', reason: { kind: 'stop' } })
-  assert.ok(!chunks.some(c => c.type === 'usage'), 'no usage chunk (portal reports none)')
+  // The portal reports no token counts, so the adapter estimates them; the
+  // chunk must land before the terminal chunk so the assembler records it.
+  const usageIndex = chunks.findIndex(c => c.type === 'usage')
+  assert.ok(usageIndex >= 0, 'emits an estimated usage chunk')
+  assert.ok(usageIndex < chunks.length - 1, 'usage precedes the terminal finish')
+  const usage = chunks[usageIndex].usage
+  assert.ok(usage.inputTokens > 0 && usage.outputTokens > 0, 'estimates both sides')
+  assert.equal(usage.totalTokens, usage.inputTokens + usage.outputTokens, 'total is the sum')
 
   const assembler = new BlockAssembler()
   for (const chunk of chunks) assembler.push(chunk)
