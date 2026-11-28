@@ -90,6 +90,38 @@ function stringParameter(parameter, description) {
 }
 
 /**
+ * Strict codec for one boolean parameter.
+ * @param {string} typeSymbol - stable identity of the declared type.
+ * @returns {{ mode: 'strict', typeSymbol: string, create: () => unknown, jsonSchema: { type: 'boolean' } }}
+ */
+function booleanCodec(typeSymbol) {
+  return {
+    mode: 'strict',
+    typeSymbol,
+    create: () => z.boolean(),
+    jsonSchema: { type: 'boolean' },
+  }
+}
+
+/**
+ * One `json` parameter carrying a boolean.
+ * @param {string} parameter - parameter name, also its wire field.
+ * @param {string} description - documentation shown to generated clients.
+ * @returns {object}
+ */
+function booleanParameter(parameter, description) {
+  const typeSymbol = `${PACKAGE}#${SERVICE_KEY}:${parameter}`
+  return {
+    name: parameter,
+    wire: parameter,
+    description,
+    source: 'json',
+    codec: booleanCodec(typeSymbol),
+    strictCodec: booleanCodec(typeSymbol),
+  }
+}
+
+/**
  * Describe one direct Remote method.
  * @param {string} method - service method name; the gateway calls it by this name.
  * @param {readonly object[]} parameters
@@ -116,6 +148,8 @@ const DESCRIPTORS = Object.freeze([
   descriptor('getQuota', [stringParameter('model', 'Wire model key, or LAST for the most recently used one.')], 'One model\'s portal quota.'),
   descriptor('setCookie', [stringParameter('cookie', 'Cookie header value copied from a signed-in portal request.')], 'Store the portal session cookie and verify it.'),
   descriptor('clearCookie', [], 'Remove the stored portal session cookie.'),
+  descriptor('getDisclaimerPreference', [], 'Whether the plugin accepts the portal\'s GenAI disclaimer automatically, and whether a saved change still needs a reload.'),
+  descriptor('setAcceptDisclaimer', [booleanParameter('acceptDisclaimer', 'Accept the portal\'s GenAI disclaimer automatically instead of reporting it as a failure.')], 'Save the GenAI disclaimer preference; the provider reloads to apply it.'),
 ])
 
 /**
@@ -124,6 +158,41 @@ const DESCRIPTORS = Object.freeze([
  * dispatches from the descriptors alone.
  */
 const REFLECTION = Object.freeze({ services: [], events: [], objects: [] })
+
+/**
+ * Read and write `acceptDisclaimer` on the Loader entry that owns this plugin.
+ *
+ * The option is ordinary (not volatile) configuration: the adapter reads it
+ * once when it is built, so a save restarts the provider through Loader's
+ * normal lifecycle. The settings page explains that instead of pretending the
+ * change is applied instantly.
+ * @param {import('@deepseek-ai/cordis').Context} ctx - the provider plugin's context.
+ */
+function createDisclaimerSetting(ctx) {
+  const entry = ctx.fiber.entry
+  return {
+    /** Whether the profile can persist a change at all. */
+    get writable() {
+      return entry !== undefined && ctx.get('configEditor') !== undefined
+    },
+    /** The value saved in the Loader entry. */
+    read() {
+      return entry?.options?.config?.acceptDisclaimer === true
+    },
+    /**
+     * Persist the preference; Loader reloads the provider to apply it.
+     * @param {boolean} enabled
+     * @returns {Promise<void>}
+     */
+    async save(enabled) {
+      const editor = ctx.get('configEditor')
+      if (entry === undefined || editor === undefined) {
+        throw new Error('This profile cannot save plugin configuration from the page.')
+      }
+      await editor.edit(entry, current => ({ ...current, acceptDisclaimer: enabled }))
+    },
+  }
+}
 
 /**
  * Publish the account's per-model portal quota to the Web client.
@@ -136,13 +205,15 @@ const REFLECTION = Object.freeze({ services: [], events: [], objects: [] })
 export class CtuQuotaService extends TypertRemoteService {
   /**
    * @param {import('@deepseek-ai/cordis').Context} ctx - owning context.
-   * @param {{ adapter: CtuPortalAdapter, cookieEnv: string }} config
+   * @param {{ adapter: CtuPortalAdapter, cookieEnv: string, disclaimer: ReturnType<typeof createDisclaimerSetting> }} config
    */
   constructor(ctx, config) {
     super(ctx, SERVICE_KEY)
     this.adapter = config.adapter
     /** Credential reference: the same name a headless install reads from the environment. */
     this.cookieEnv = config.cookieEnv
+    /** Saved-vs-running `acceptDisclaimer` preference. */
+    this.disclaimer = config.disclaimer
     /** @type {{ at: number, value: object | undefined }} */
     this.cache = { at: 0, value: undefined }
   }
@@ -214,6 +285,40 @@ export class CtuQuotaService extends TypertRemoteService {
   }
 
   /**
+   * Report the saved `acceptDisclaimer` preference and whether the running
+   * adapter still uses the other value.
+   * @returns {Promise<object>}
+   */
+  async getDisclaimerPreference() {
+    const acceptDisclaimer = this.disclaimer.read()
+    const running = this.adapter.options.acceptDisclaimer === true
+    return {
+      acceptDisclaimer,
+      running,
+      pending: acceptDisclaimer !== running,
+      writable: this.disclaimer.writable,
+    }
+  }
+
+  /**
+   * Save `acceptDisclaimer`; Loader restarts the provider so the adapter reads
+   * the new value. The client reports that a reload is in progress.
+   * @param {boolean} acceptDisclaimer
+   * @returns {Promise<object>}
+   */
+  async setAcceptDisclaimer(acceptDisclaimer) {
+    try {
+      await this.disclaimer.save(acceptDisclaimer)
+      return { ok: true, acceptDisclaimer }
+    } catch (error) {
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      }
+    }
+  }
+
+  /**
    * Verify the configured cookie against the portal's own quota call.
    *
    * Chat and quota share the `chatbot` module now, so `getusage` is both the
@@ -250,7 +355,11 @@ export function apply(ctx, config) {
     credentialReader: async () => (await ctx.credentials.resolve(options.cookieEnv))?.value,
   })
   ctx.llm.registerAdapter([PROVIDER_ID], adapter)
-  ctx.plugin(CtuQuotaService, { adapter, cookieEnv: options.cookieEnv })
+  ctx.plugin(CtuQuotaService, {
+    adapter,
+    cookieEnv: options.cookieEnv,
+    disclaimer: createDisclaimerSetting(ctx),
+  })
   // The API Gateway dispatches from `typert.local`, the registry a package
   // publishes its invocation descriptors into; `typert.remotes` is the
   // separate client/offline registry and serves no route. The package ships no

@@ -5,7 +5,8 @@
  *
  *   1. the configuration of its own bundle page in Plugins → Installed
  *      plugins → The portal chatbot, where the portal session cookie is
- *      pasted and every model's remaining quota is listed;
+ *      pasted, the GenAI disclaimer switch lives, and every model's remaining
+ *      quota is listed;
  *   2. a composer-dock pill showing the selected model's remaining quota, so
  *      the figure sits beside the harness performance readings.
  *
@@ -62,6 +63,14 @@ window.__ModuleLoader__.load({
       'settings.saveFailed': 'Could not save the cookie.',
       'settings.clearFailed': 'Could not remove the stored cookie.',
       'settings.statusFailed': 'Could not read the stored cookie status.',
+      'settings.disclaimerTitle': 'GenAI disclaimer',
+      'settings.disclaimerLabel': 'Accept the portal\'s GenAI disclaimer automatically',
+      'settings.disclaimerHelp': 'A first-time portal account has to accept the GenAI disclaimer before its first conversation. With this on, the plugin acknowledges the portal\'s disclaimer for you instead of failing the turn. Saving restarts the provider to apply it.',
+      'settings.disclaimerSaved': 'Disclaimer preference saved. The plugin is reloading to apply it.',
+      'settings.disclaimerPending': 'The preference is saved, but the running plugin still uses the old value. Reload the plugin to apply it.',
+      'settings.disclaimerNotWritable': 'This profile cannot save plugin configuration from the page. Set acceptDisclaimer in the profile patch instead.',
+      'settings.disclaimerReadFailed': 'Could not read the disclaimer preference.',
+      'settings.disclaimerSaveFailed': 'Could not save the disclaimer preference.',
       'settings.quotasTitle': 'Model quotas',
       'settings.refresh': 'Refresh',
       'settings.refreshing': 'Refreshing…',
@@ -113,6 +122,32 @@ window.__ModuleLoader__.load({
       }
     }
 
+    /**
+     * Strict codec for one boolean parameter.
+     * @param {string} typeSymbol
+     */
+    function booleanCodec(typeSymbol) {
+      return {
+        mode: 'strict',
+        typeSymbol,
+        create: () => z.boolean(),
+        jsonSchema: { type: 'boolean' },
+      }
+    }
+
+    /** One `json` parameter carrying a boolean. */
+    function booleanParameter(name, description) {
+      const typeSymbol = `${PACKAGE}#${SERVICE_KEY}:${name}`
+      return {
+        name,
+        wire: name,
+        description,
+        source: 'json',
+        codec: booleanCodec(typeSymbol),
+        strictCodec: booleanCodec(typeSymbol),
+      }
+    }
+
     /** Describe one direct Remote method. */
     function descriptor(method, parameters, description) {
       return {
@@ -134,6 +169,8 @@ window.__ModuleLoader__.load({
       descriptor('getQuota', [stringParameter('model', 'Wire model key, or LAST for the most recently used one.')], 'One model\'s portal quota.'),
       descriptor('setCookie', [stringParameter('cookie', 'Cookie header value copied from a signed-in portal request.')], 'Store the portal session cookie and verify it.'),
       descriptor('clearCookie', [], 'Remove the stored portal session cookie.'),
+      descriptor('getDisclaimerPreference', [], 'Whether the plugin accepts the portal\'s GenAI disclaimer automatically, and whether a saved change still needs a reload.'),
+      descriptor('setAcceptDisclaimer', [booleanParameter('acceptDisclaimer', 'Accept the portal\'s GenAI disclaimer automatically instead of reporting it as a failure.')], 'Save the GenAI disclaimer preference; the provider reloads to apply it.'),
     ]
 
     /**
@@ -259,6 +296,99 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * The GenAI disclaimer switch, shown beside the session-cookie form.
+     *
+     * `acceptDisclaimer` is provider configuration, not state the running Host
+     * can adopt in place: the adapter reads it when it is built, so the Host
+     * saves it through the profile's config editor and the plugin reloads.
+     * `pending` covers the moment between the save and that reload.
+     * @param {{ call: (method: string, argument?: unknown) => Promise<any>, t: any }}
+     */
+    function DisclaimerSwitch({ call, t }) {
+      const [preference, setPreference] = useState(null)
+      const [busy, setBusy] = useState(false)
+      const [notice, setNotice] = useState(null)
+      const [failure, setFailure] = useState(null)
+
+      const readPreference = useCallback(async () => {
+        const answer = await call('getDisclaimerPreference')
+        return answer?.ok === true ? answer.value : undefined
+      }, [call])
+
+      const refresh = useCallback(async () => {
+        const value = await readPreference()
+        if (value !== undefined) {
+          setPreference(value)
+          setFailure(null)
+        } else {
+          setFailure(t('settings.disclaimerReadFailed'))
+        }
+      }, [readPreference, t])
+
+      useEffect(() => {
+        void refresh()
+      }, [refresh])
+
+      const toggle = useCallback(async event => {
+        const enabled = event.target.checked
+        setBusy(true)
+        setNotice(null)
+        setFailure(null)
+        const answer = await call('setAcceptDisclaimer', enabled)
+        setBusy(false)
+        const value = answer?.ok === true ? answer.value : undefined
+        if (value?.ok === true) {
+          // A successful edit means the config editor already reconciled the
+          // profile, so the reloaded provider is running with this value.
+          setPreference(previous => ({
+            acceptDisclaimer: enabled,
+            running: enabled,
+            pending: false,
+            writable: previous?.writable === true,
+          }))
+          setNotice(t('settings.disclaimerSaved'))
+          return
+        }
+        // Saving restarts this provider, so the reply can be lost while the old
+        // generation disposes even though the write landed. Confirm once the
+        // restarted service answers before reporting a failure.
+        let saved
+        for (let attempt = 0; attempt < 3 && saved === undefined; attempt += 1) {
+          if (attempt > 0) await new Promise(resolve => setTimeout(resolve, 400))
+          saved = await readPreference()
+        }
+        if (saved?.acceptDisclaimer === enabled) {
+          setPreference(saved)
+          setNotice(t('settings.disclaimerSaved'))
+          return
+        }
+        setFailure(value?.error ?? answer?.error?.message ?? t('settings.disclaimerSaveFailed'))
+      }, [call, readPreference, t])
+
+      const loaded = preference !== null && preference !== undefined
+      const checked = loaded && preference.acceptDisclaimer === true
+      const writable = loaded && preference.writable === true
+
+      return h('div', { style: sectionStyle },
+        h('strong', null, t('settings.disclaimerTitle')),
+        h('label', { style: { ...rowStyle, cursor: writable ? 'pointer' : 'default' } },
+          h('input', {
+            type: 'checkbox',
+            checked,
+            disabled: busy || !writable,
+            onChange: toggle,
+          }),
+          h('span', null, t('settings.disclaimerLabel')),
+        ),
+        h('p', { style: hintStyle }, t('settings.disclaimerHelp')),
+        loaded && !writable ? h('p', { style: warnStyle }, t('settings.disclaimerNotWritable')) : null,
+        loaded && preference.pending === true ? h('p', { style: warnStyle }, t('settings.disclaimerPending')) : null,
+        notice === null ? null : h('p', { style: hintStyle }, notice),
+        failure === null ? null : h('p', { style: dangerStyle }, failure),
+      )
+    }
+
+    /**
      * Plugins → Installed plugins → The portal chatbot: the bundle page's
      * configuration section, which stores the session cookie and reads every
      * model's remaining quota.
@@ -361,6 +491,7 @@ window.__ModuleLoader__.load({
               busy ? t('settings.saving') : t('settings.save')),
             h('button', { type: 'button', style: buttonStyle, onClick: clear, disabled: busy }, t('settings.clear')),
           ),
+          h(DisclaimerSwitch, { call, t }),
           notice === null ? null : h('p', { style: hintStyle }, notice),
           warning === null ? null : h('p', { style: warnStyle }, warning),
           failure === null ? null : h('p', { style: dangerStyle }, failure),

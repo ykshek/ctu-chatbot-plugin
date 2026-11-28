@@ -19,9 +19,10 @@ directory (`ctu-chatbot-plugin/`) as the add target, or use `plugin_manager`
 
 The portal authenticates with a browser session cookie. After installing, open
 **Plugins → Installed plugins → The portal chatbot**, paste the `Cookie`
-request header from a signed-in portal request, and press **Save**. That page
-also lists every model's remaining portal quota, and the composer dock shows
-the selected model's quota as a pill.
+request header from a signed-in portal request, and press **Save**. The same
+page has a switch for **Accept the portal's GenAI disclaimer automatically**,
+and lists every model's remaining portal quota; the composer dock shows the
+selected model's quota as a pill.
 
 For a headless install the same credential can come from the environment:
 

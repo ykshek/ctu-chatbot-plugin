@@ -6,7 +6,7 @@ to DeepSeek Harness as the text-only LLM provider `ctu-portal`.
 **Configure it here.** This window belongs to the plugin's own page
 (**Plugins → Installed plugins → The portal chatbot**). Below this document
 the page holds the **Portal session** field, where the portal cookie is pasted,
-and the table of every model's remaining quota.
+the **GenAI disclaimer** switch, and the table of every model's remaining quota.
 
 ## What it actually is
 
@@ -49,10 +49,13 @@ close the other tab, and does not fight the portal for the session.
 
 A first-time account (or one that has not accepted the current terms) gets
 `status: "showdisclaimer"` (or `"newUser"`) instead of a working conversation.
-The plugin reports that as `INVALID_REQUEST` and asks you to accept the
-disclaimer once at `https://www.cityu.edu.hk/portal/category/5`. Set
-`acceptDisclaimer: true` only if you want the plugin to post the acknowledgement
-for you.
+By default the plugin reports that as `INVALID_REQUEST` and asks you to accept
+the disclaimer once at `https://www.cityu.edu.hk/portal/category/5`. To let the
+plugin post the acknowledgement for you, turn on **Accept the portal's GenAI
+disclaimer automatically** on the plugin's page, under **Portal session**. The
+switch writes the `acceptDisclaimer` option below. Saving it restarts the
+provider so the adapter reads the new value; a headless profile sets the option
+in configuration instead.
 
 ## Models
 
@@ -84,7 +87,7 @@ The plugin reads its config from the bundle patch and/or the profile's
 | `sessionId` | *(random UUID)* | fixed conversation id across restarts |
 | `style` | `"1"` | portal thinking effort: `"0"` quick, `"1"` balanced, `"2"` deep (names `quick`/`balanced`/`deep` also work) |
 | `sessionOnly` | `false` | portal's "show current session only" flag for the conversation |
-| `acceptDisclaimer` | `false` | post the GenAI disclaimer acknowledgement automatically instead of asking the operator to accept it |
+| `acceptDisclaimer` | `false` | post the GenAI disclaimer acknowledgement automatically instead of asking the operator to accept it; the plugin page's switch writes this option |
 | `contextWindow` | `32000` | declared context so harness compaction runs early |
 | `requestTimeoutMs` | `120000` | full-request deadline |
 | `maxQuestionChars` | `24000` | cap on the flattened transcript |
