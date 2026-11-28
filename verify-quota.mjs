@@ -19,18 +19,15 @@ const server = createServer((req, res) => {
   req.on('data', chunk => { body += chunk })
   req.on('end', () => {
     const url = req.url ?? ''
-    if (url.endsWith('/kbchatbot/startnewconversation')) {
-      res.writeHead(200, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ status: 'success' }))
-      return
-    }
-    if (url.endsWith('/kbchatbot/getchatresponse')) {
+    if (url.endsWith('/chatbot/getchatresponse')) {
+      const { id } = JSON.parse(body || '{}')
+      const framed = `${id},,,Hello from the mock portal.`
       res.writeHead(200, { 'content-type': 'text/plain' })
-      res.write('Hello ')
-      res.end('from the mock portal.')
+      res.write(framed.slice(0, 10))
+      res.end(framed.slice(10))
       return
     }
-    if (url.endsWith('/kbchatbot/getchathistory')) {
+    if (url.endsWith('/chatbot/getchathistory')) {
       res.writeHead(200, { 'content-type': 'application/json' })
       res.end(JSON.stringify({ status: 'success', chatMessages: [] }))
       return
@@ -74,7 +71,7 @@ function check(label, condition, detail) {
 
 // 1. Usage chunk from a chat call.
 {
-  const adapter = new CityuPortalAdapter(resolveOptions({ baseURL: `${base}/kbchatbot`, quotaBaseURL: quotaBase, cookie: 'a=b' }))
+  const adapter = new CityuPortalAdapter(resolveOptions({ baseURL: `${base}/chatbot`, quotaBaseURL: quotaBase, cookie: 'a=b' }))
   const chunks = []
   for await (const chunk of adapter.stream({ model: 'cityu-dsv4', messages: [{ role: 'user', content: [{ type: 'text', text: 'hi there' }] }] })) {
     chunks.push(chunk)
@@ -94,7 +91,7 @@ function check(label, condition, detail) {
 
 // 2. One model's quota.
 {
-  const adapter = new CityuPortalAdapter(resolveOptions({ baseURL: `${base}/kbchatbot`, quotaBaseURL: quotaBase, cookie: 'a=b' }))
+  const adapter = new CityuPortalAdapter(resolveOptions({ baseURL: `${base}/chatbot`, quotaBaseURL: quotaBase, cookie: 'a=b' }))
   const reading = await adapter.readQuota('GPT')
   console.log('2. readQuota')
   check('quota read', reading.quota === 15000, reading.quota)
@@ -107,7 +104,7 @@ function check(label, condition, detail) {
 
 // 3. Every model's quota.
 {
-  const adapter = new CityuPortalAdapter(resolveOptions({ baseURL: `${base}/kbchatbot`, quotaBaseURL: quotaBase, cookie: 'a=b', quotaCacheMs: 1000 }))
+  const adapter = new CityuPortalAdapter(resolveOptions({ baseURL: `${base}/chatbot`, quotaBaseURL: quotaBase, cookie: 'a=b', quotaCacheMs: 1000 }))
   const answer = await adapter.readAllQuotas()
   console.log('3. readAllQuotas')
   const wires = Object.keys(answer.readings)
@@ -121,7 +118,7 @@ function check(label, condition, detail) {
 {
   let reads = 0
   const adapter = new CityuPortalAdapter(
-    resolveOptions({ baseURL: `${base}/kbchatbot`, quotaBaseURL: quotaBase }),
+    resolveOptions({ baseURL: `${base}/chatbot`, quotaBaseURL: quotaBase }),
     { credentialReader: async () => { reads += 1; return 'stored=1' } },
   )
   const reading = await adapter.readQuota('GPTmini')
@@ -130,17 +127,19 @@ function check(label, condition, detail) {
   check('quota read through stored cookie', reading.quota === 45000, reading.quota)
 }
 
-// 5. Read-only chat probe on the kbchatbot module.
+// 5. The settings probe: LAST resolves the most recently used model.
 {
-  const adapter = new CityuPortalAdapter(resolveOptions({ baseURL: `${base}/kbchatbot`, quotaBaseURL: quotaBase, cookie: 'a=b' }))
-  const history = await adapter.probeChat()
-  console.log('5. probeChat')
-  check('history read through the chat module', history.status === 'success', history)
+  const adapter = new CityuPortalAdapter(resolveOptions({ baseURL: `${base}/chatbot`, quotaBaseURL: quotaBase, cookie: 'a=b' }))
+  const reading = await adapter.readQuota('LAST')
+  console.log('5. settings probe')
+  check('LAST resolves the reading', reading.quota === 90000, reading.quota)
+  check('LAST maps to the most recently used model', reading.model === 'LAST', reading.model)
+  check('catalog still carried', reading.catalog.length === 4, reading.catalog)
 }
 
 // 6. No cookie anywhere.
 {
-  const adapter = new CityuPortalAdapter(resolveOptions({ baseURL: `${base}/kbchatbot`, quotaBaseURL: quotaBase, cookieEnv: 'CTU_VERIFY_ABSENT' }))
+  const adapter = new CityuPortalAdapter(resolveOptions({ baseURL: `${base}/chatbot`, quotaBaseURL: quotaBase, cookieEnv: 'CTU_VERIFY_ABSENT' }))
   console.log('6. missing credential')
   try {
     await adapter.readQuota('GPT')
