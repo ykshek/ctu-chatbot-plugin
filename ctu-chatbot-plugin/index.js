@@ -214,19 +214,38 @@ export class CtuQuotaService extends TypertRemoteService {
   }
 
   /**
-   * Verify the configured cookie by reading the last used model's quota. A
-   * stale cookie fails here rather than on the user's next chat turn.
+   * Verify the configured cookie without failing the settings page over the
+   * quota endpoint alone.
+   *
+   * The portal serves quota from its `chatbot` module, which sits behind a
+   * stricter edge filter than the `kbchatbot` module the chat uses. A cookie
+   * that works for chat can therefore be rejected by `getusage`; fall back to
+   * a read-only chat-history probe and report the quota problem as a warning
+   * instead of pretending the whole cookie is unusable.
    * @returns {Promise<object>}
    */
   async probe() {
+    const status = await this.getAuthStatus()
     try {
       const quota = await this.adapter.readQuota('LAST')
-      return { ok: true, quota, status: await this.getAuthStatus() }
+      return { ok: true, quota, status }
     } catch (error) {
-      return {
-        ok: false,
-        error: error instanceof Error ? error.message : String(error),
-        status: await this.getAuthStatus(),
+      const quotaError = error instanceof Error ? error.message : String(error)
+      try {
+        await this.adapter.probeChat()
+        return {
+          ok: true,
+          status,
+          warning: `The cookie is stored and the chatbot is reachable, but the portal's `
+            + `quota endpoint rejected it: ${quotaError}`,
+        }
+      } catch (chatError) {
+        return {
+          ok: false,
+          error: chatError instanceof Error ? chatError.message : String(chatError),
+          quotaError,
+          status,
+        }
       }
     }
   }

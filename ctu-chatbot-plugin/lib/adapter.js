@@ -15,7 +15,7 @@ import { randomUUID } from 'node:crypto'
 import { CityuPortalError } from './errors.js'
 import { estimateTokens } from './estimate.js'
 import { findModel, MODELS, wireModel } from './models.js'
-import { chatStream, normalizeCookie, startNewConversation } from './protocol.js'
+import { chatStream, getChatHistory, normalizeCookie, startNewConversation } from './protocol.js'
 import { fetchAllQuotas, fetchQuota } from './quota.js'
 
 /** Role labels used when flattening the message history into one question. */
@@ -323,6 +323,27 @@ export class CityuPortalAdapter {
       + `(Plugins → Installed plugins → CityUHK portal chatbot), or set the ${this.options.cookieEnv} environment variable.`,
       'MISSING_CREDENTIAL',
     )
+  }
+
+  /**
+   * Read the portal's chat history as a read-only reachability probe.
+   *
+   * The quota endpoint lives in the portal's separate `chatbot` module, which
+   * sits behind a stricter edge filter; a cookie that works for chat can still
+   * be rejected there. This probe uses the same `kbchatbot` module as the chat
+   * calls, so the settings page can tell "the chatbot is reachable" apart from
+   * "quota is unreadable".
+   * @param {AbortSignal} [signal]
+   * @returns {Promise<Record<string, unknown>>}
+   */
+  async probeChat(signal) {
+    return getChatHistory({
+      baseURL: this.options.baseURL,
+      cookie: await this.resolveCookie(),
+      id: this.sessionId,
+      model: 'IT-Portal',
+      signal,
+    })
   }
 
   /**

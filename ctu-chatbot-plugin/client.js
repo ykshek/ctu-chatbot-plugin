@@ -56,6 +56,7 @@ window.__ModuleLoader__.load({
       'settings.saving': 'Saving…',
       'settings.clear': 'Clear',
       'settings.saved': 'Cookie saved and verified against the portal.',
+      'settings.savedQuotaUnavailable': 'Cookie saved; the quota endpoint could not be verified.',
       'settings.cleared': 'Stored cookie removed.',
       'settings.rejected': 'The portal rejected that cookie.',
       'settings.saveFailed': 'Could not save the cookie.',
@@ -200,6 +201,7 @@ window.__ModuleLoader__.load({
       cursor: 'pointer',
     }
     const hintStyle = { fontSize: '0.85em', color: 'var(--dsh-text-secondary, #8b8b8b)', margin: 0 }
+    const warnStyle = { ...hintStyle, color: 'var(--dsh-warning, #d29922)' }
     const dangerStyle = { ...hintStyle, color: 'var(--dsh-danger, #e5534b)' }
     const tableStyle = { borderCollapse: 'collapse', width: '100%', fontSize: '0.9em' }
     const cellStyle = { padding: '0.3rem 0.5rem', borderBottom: '1px solid var(--dsh-border-subtle, #2c2c2c)', textAlign: 'left' }
@@ -269,6 +271,7 @@ window.__ModuleLoader__.load({
       const [cookie, setCookie] = useState('')
       const [busy, setBusy] = useState(false)
       const [notice, setNotice] = useState(null)
+      const [warning, setWarning] = useState(null)
       const [failure, setFailure] = useState(null)
       const [quotas, setQuotas] = useState(null)
       const [quotasBusy, setQuotasBusy] = useState(false)
@@ -297,6 +300,7 @@ window.__ModuleLoader__.load({
       const save = useCallback(async () => {
         setBusy(true)
         setNotice(null)
+        setWarning(null)
         setFailure(null)
         const answer = await call('setCookie', cookie)
         setBusy(false)
@@ -304,7 +308,9 @@ window.__ModuleLoader__.load({
         if (value?.status !== undefined) setStatus(value.status)
         if (value?.ok === true) {
           setCookie('')
-          setNotice(t('settings.saved'))
+          const warning = typeof value.warning === 'string' && value.warning !== '' ? value.warning : null
+          setNotice(warning === null ? t('settings.saved') : t('settings.savedQuotaUnavailable'))
+          if (warning !== null) setWarning(warning)
           void refreshQuotas()
           return
         }
@@ -314,6 +320,7 @@ window.__ModuleLoader__.load({
       const clear = useCallback(async () => {
         setBusy(true)
         setNotice(null)
+        setWarning(null)
         setFailure(null)
         const answer = await call('clearCookie')
         setBusy(false)
@@ -355,6 +362,7 @@ window.__ModuleLoader__.load({
             h('button', { type: 'button', style: buttonStyle, onClick: clear, disabled: busy }, t('settings.clear')),
           ),
           notice === null ? null : h('p', { style: hintStyle }, notice),
+          warning === null ? null : h('p', { style: warnStyle }, warning),
           failure === null ? null : h('p', { style: dangerStyle }, failure),
         ),
         h(QuotaTable, { quotas, busy: quotasBusy, error: quotasError, onRefresh: refreshQuotas, t }),

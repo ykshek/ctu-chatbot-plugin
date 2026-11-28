@@ -174,6 +174,60 @@ export async function* chatStream({ baseURL, cookie, id, model, qst, signal }) {
 }
 
 /**
+ * Read the signed-in account's stored chat history.
+ *
+ * The portal's widget calls this on load to render the transcript. The plugin
+ * uses it as a read-only reachability probe: it lives in the `kbchatbot` module
+ * the chat calls already use, so it does not touch the separate `chatbot`
+ * module that serves quota and sits behind a stricter edge filter.
+ * @param {object} request
+ * @param {string} request.baseURL
+ * @param {string} request.cookie
+ * @param {string} request.id
+ * @param {string} request.model
+ * @param {AbortSignal} [request.signal]
+ * @returns {Promise<Record<string, unknown>>}
+ */
+export async function getChatHistory({ baseURL, cookie, id, model, signal }) {
+  const response = await fetch(`${baseURL}/getchathistory`, {
+    method: 'POST',
+    redirect: 'error',
+    signal,
+    headers: {
+      ...attributionHeaders(),
+      accept: 'application/json, text/plain, */*',
+      'content-type': 'application/json',
+      cookie,
+    },
+    body: JSON.stringify({ id, model, qst: 'Hi' }),
+  })
+  const text = await response.text()
+  if (!response.ok) throw httpFailure(response.status, text)
+  if (looksLikeLoginPage(response, text)) throw loginPageFailure()
+  let parsed
+  try {
+    parsed = JSON.parse(text)
+  } catch (cause) {
+    throw new CityuPortalError(
+      'CityUHK portal returned a non-JSON history response',
+      'MALFORMED_RESPONSE',
+      { status: response.status, cause },
+    )
+  }
+  if (parsed === null || typeof parsed !== 'object' || parsed.status !== 'success') {
+    const denied = accessDeniedFailure(parsed)
+    if (denied !== undefined) throw denied
+    const status = typeof parsed?.status === 'string' && parsed.status !== '' ? parsed.status : 'unknown'
+    throw new CityuPortalError(
+      `CityUHK portal could not read the chat history (status: ${status}). `
+      + 'Sign in to the portal again and copy a fresh Cookie header value.',
+      'INVALID_REQUEST',
+    )
+  }
+  return parsed
+}
+
+/**
  * Read the signed-in account's quota for one model.
  *
  * The portal reports quota per model, not per account: `model` selects which
