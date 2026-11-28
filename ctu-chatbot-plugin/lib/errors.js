@@ -1,5 +1,5 @@
 /**
- * Provider-neutral failure raised by the CityUHK portal adapter.
+ * Provider-neutral failure raised by the portal adapter.
  *
  * The harness turns a thrown adapter error into a terminal `finish` chunk by
  * reading the error's own `failure` data property (verified in
@@ -14,7 +14,7 @@
  */
 
 /**
- * @typedef {object} CityuFailure
+ * @typedef {object} CtuFailure
  * @property {string} message
  * @property {string} code
  * @property {number} [status]
@@ -22,23 +22,23 @@
  * @property {number} [providerRetryAfterMs]
  */
 
-/** @typedef {{ cause?: unknown, status?: number, requestId?: string, retryAfterMs?: number }} CityuErrorOptions */
+/** @typedef {{ cause?: unknown, status?: number, requestId?: string, retryAfterMs?: number }} CtuErrorOptions */
 
 /**
  * An error the LLM runtime can normalize without importing the harness copy.
  */
-export class CityuPortalError extends Error {
+export class CtuPortalError extends Error {
   /**
    * @param {string} message - non-empty user-facing description.
    * @param {string} code - one of the harness `LLM_FAILURE_CODES`.
-   * @param {CityuErrorOptions} [options]
+   * @param {CtuErrorOptions} [options]
    */
   constructor(message, code, options = {}) {
     const { cause, status, requestId, retryAfterMs } = options
     super(message, cause === undefined ? undefined : { cause })
-    this.name = 'CityuPortalError'
+    this.name = 'CtuPortalError'
     this.code = code
-    /** @type {CityuFailure} */
+    /** @type {CtuFailure} */
     this.failure = Object.freeze({
       message,
       code,

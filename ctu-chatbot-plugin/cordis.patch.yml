@@ -1,10 +1,10 @@
-# Activates the CityUHK portal chatbot as the `cityu-portal` LLM provider.
+# Activates the portal chatbot as the `ctu-portal` LLM provider.
 # The portal authenticates with a browser session cookie, which this plugin
 # reads from the environment variable named by `cookieEnv` at request time.
 - insert:
     - id: ctu-chatbot-plugin
       name: 'ctu-chatbot-plugin'
       config:
-        cookieEnv: CITYU_PORTAL_COOKIE
+        cookieEnv: CTU_PORTAL_COOKIE
         contextWindow: 32000
         requestTimeoutMs: 120000

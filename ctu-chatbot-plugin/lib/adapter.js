@@ -1,5 +1,5 @@
 /**
- * `LlmAdapter`-compatible adapter for the CityUHK portal chatbot.
+ * `LlmAdapter`-compatible adapter for the portal chatbot.
  *
  * The harness only duck-types the adapter (`providerInfo`, `providerRetryPolicy`,
  * `prepareCall`, `resolveModel`, `listModels`, `stream`), so this class needs no
@@ -19,7 +19,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { CityuPortalError } from './errors.js'
+import { CtuPortalError } from './errors.js'
 import { estimateTokens } from './estimate.js'
 import { findModel, MODELS, wireModel } from './models.js'
 import { chatStream, normalizeCookie, openConversation } from './protocol.js'
@@ -127,7 +127,7 @@ function isRedirectFailure(error) {
  * @property {boolean} includeSystemPrompt
  */
 
-export class CityuPortalAdapter {
+export class CtuPortalAdapter {
   /**
    * @param {AdaptedOptions} options - normalized plugin config.
    * @param {{ credentialReader?: () => Promise<string | undefined> }} [auth] - reads the stored session cookie.
@@ -150,7 +150,7 @@ export class CityuPortalAdapter {
    * @returns {{ id: string, name: string }}
    */
   providerInfo(provider) {
-    return { id: provider, name: 'CityUHK Portal Chatbot' }
+    return { id: provider, name: 'The portal chatbot' }
   }
 
   /**
@@ -230,8 +230,8 @@ export class CityuPortalAdapter {
       const cookie = await this.resolveCookie()
       const question = buildQuestion(options, this.options)
       if (question === '') {
-        throw new CityuPortalError(
-          'CityUHK portal adapter received no text to ask',
+        throw new CtuPortalError(
+          'The portal adapter received no text to ask',
           'INVALID_REQUEST',
         )
       }
@@ -275,8 +275,8 @@ export class CityuPortalAdapter {
       }
       const answer = chunks.join('')
       if (answer.trim() === '') {
-        throw new CityuPortalError(
-          'CityUHK portal returned an empty answer',
+        throw new CtuPortalError(
+          'The portal returned an empty answer',
           'EMPTY_RESPONSE',
         )
       }
@@ -293,7 +293,7 @@ export class CityuPortalAdapter {
       }
       yield { type: 'finish', reason: { kind: 'stop' } }
     } catch (error) {
-      if (error instanceof CityuPortalError) {
+      if (error instanceof CtuPortalError) {
         // The portal's one-active-session guard means the next attempt must
         // open the conversation again, after the user closes the other tab.
         if (error.code === 'INVALID_REQUEST' && /active chatbot session/iu.test(error.message)) {
@@ -303,24 +303,24 @@ export class CityuPortalAdapter {
         throw error
       }
       if (timedOut) {
-        throw new CityuPortalError(
-          `CityUHK portal did not answer within ${Math.round(this.options.requestTimeoutMs / 1000)}s`,
+        throw new CtuPortalError(
+          `The portal did not answer within ${Math.round(this.options.requestTimeoutMs / 1000)}s`,
           'TIMEOUT',
           { cause: error },
         )
       }
       if (options.signal?.aborted) {
-        throw new CityuPortalError('CityUHK portal request aborted', 'ABORTED', { cause: error })
+        throw new CtuPortalError('The portal request aborted', 'ABORTED', { cause: error })
       }
       if (isRedirectFailure(error)) {
-        throw new CityuPortalError(
-          'CityUHK portal redirected the request instead of answering. '
+        throw new CtuPortalError(
+          'The portal redirected the request instead of answering. '
           + 'The session cookie is missing or expired; sign in to the portal again and copy a fresh Cookie header value.',
           'INVALID_CREDENTIAL',
           { cause: error },
         )
       }
-      throw new CityuPortalError('CityUHK portal transport failed', 'TRANSPORT', { cause: error })
+      throw new CtuPortalError('The portal transport failed', 'TRANSPORT', { cause: error })
     } finally {
       clearTimeout(timer)
       controller.abort()
@@ -345,9 +345,9 @@ export class CityuPortalAdapter {
     const envValue = process.env[this.options.cookieEnv]
     const fromEnv = typeof envValue === 'string' ? normalizeCookie(envValue) : ''
     if (fromEnv !== '') return fromEnv
-    throw new CityuPortalError(
-      `No CityUHK portal session cookie is configured. Paste one into the plugin's settings `
-      + `(Plugins → Installed plugins → CityUHK portal chatbot), or set the ${this.options.cookieEnv} environment variable.`,
+    throw new CtuPortalError(
+      `No portal session cookie is configured. Paste one into the plugin's settings `
+      + `(Plugins → Installed plugins → The portal chatbot), or set the ${this.options.cookieEnv} environment variable.`,
       'MISSING_CREDENTIAL',
     )
   }

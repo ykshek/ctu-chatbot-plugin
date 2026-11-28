@@ -1,5 +1,5 @@
 /**
- * Per-model quota for the CityUHK portal chatbot account.
+ * Per-model quota for the portal chatbot account.
  *
  * The portal does not have one account-wide allowance: each model on the
  * dashboard carries its own `quota` / `quotaLeft` pair, read from
@@ -26,7 +26,7 @@ export const QUOTA_MODELS = Object.freeze(
     .filter(entry => entry.wire !== 'IT-Portal')
     .map(entry => Object.freeze({
       wire: entry.wire,
-      label: entry.name.replace(/^CityUHK\s+/u, ''),
+      label: entry.name,
     })),
 )
 

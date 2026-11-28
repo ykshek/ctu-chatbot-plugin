@@ -2,12 +2,12 @@
   "name": "ctu-chatbot-plugin",
   "version": "1.0.4",
   "private": false,
-  "description": "CityUHK IT-portal chatbot as a text-only DeepSeek Harness LLM provider.",
+  "description": "The IT-portal chatbot as a text-only DeepSeek Harness LLM provider.",
   "keywords": [
     "deepseek-harness",
     "dsh",
     "dsh-plugin",
-    "cityu",
+    "ctu",
     "llm-provider",
     "chatbot"
   ],

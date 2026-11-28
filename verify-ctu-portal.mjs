@@ -1,5 +1,5 @@
 /**
- * Standalone verification for the CityUHK portal adapter.
+ * Standalone verification for the portal adapter.
  *
  * Runs the real adapter against a local mock of the portal's `chatbot` module
  * and checks the exact harness contract: chunk order, assembled message, the
@@ -7,13 +7,13 @@
  * handling, disclaimer handling, and failure classification through the
  * harness's own `normalizeLlmFailure`.
  *
- * Run: node verify-cityu-portal.mjs
+ * Run: node verify-ctu-portal.mjs
  */
 
 import { createServer } from 'node:http'
 import { gzipSync } from 'node:zlib'
 import { strict as assert } from 'node:assert'
-import { buildQuestion, CityuPortalAdapter } from './ctu-chatbot-plugin/lib/adapter.js'
+import { buildQuestion, CtuPortalAdapter } from './ctu-chatbot-plugin/lib/adapter.js'
 import { resolveOptions } from './ctu-chatbot-plugin/lib/config.js'
 
 const LLM = 'file:///var/home/linuxbrew/.linuxbrew/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-llm/lib/index.js'
@@ -25,7 +25,7 @@ const { normalizeLlmFailure } = await import(FAILURE)
 const seen = []
 
 const ANSWER = [
-  '**Reset your CityU portal password**\n\n',
+  '**Reset your portal password**\n\n',
   '1. Open the [password reset page](https://www.cityu.edu.hk/).\n',
   '2. Confirm your EID.\n',
   '3. Follow the emailed link.\n',
@@ -224,7 +224,7 @@ function failureOf(error) {
 
 /** @param {object} overrides */
 function makeAdapter(overrides = {}) {
-  return new CityuPortalAdapter(resolveOptions({
+  return new CtuPortalAdapter(resolveOptions({
     baseURL,
     cookie: 'JSESSIONID=test-cookie; portal=1',
     requestTimeoutMs: 5000,
@@ -249,14 +249,14 @@ function check(name, fn) {
 
 const history = [
   { role: 'system', content: [{ type: 'text', text: 'You are a helpful assistant.' }] },
-  { role: 'user', content: [{ type: 'text', text: 'How do I reset my CityU portal password?' }] },
+  { role: 'user', content: [{ type: 'text', text: 'How do I reset my portal password?' }] },
   { role: 'assistant', content: [{ type: 'text', text: 'Use the password reset page.' }] },
   { role: 'user', content: [{ type: 'text', text: 'And if the link expires?' }] },
 ]
 
 await check('happy path streams one text block without the conversation-id frame', async () => {
   const adapter = makeAdapter()
-  const chunks = await collect(adapter.stream({ provider: 'cityu-portal', model: 'cityu-gpt5', messages: history }))
+  const chunks = await collect(adapter.stream({ provider: 'ctu-portal', model: 'ctu-gpt5', messages: history }))
 
   assert.deepEqual(chunks[0], { type: 'block-start', index: 0, blockType: 'text' })
   assert.ok(chunks.some(c => c.type === 'text-delta'), 'has text deltas')
@@ -278,7 +278,7 @@ await check('happy path streams one text block without the conversation-id frame
 
   const assembler = new BlockAssembler()
   for (const chunk of chunks) assembler.push(chunk)
-  const message = assembler.message({ provider: 'cityu-portal', model: 'cityu-gpt5' })
+  const message = assembler.message({ provider: 'ctu-portal', model: 'ctu-gpt5' })
   assert.deepEqual(message.content, [{ type: 'text', text: ANSWER }])
   assert.equal(assembler.finish.kind, 'stop')
 })
@@ -286,16 +286,16 @@ await check('happy path streams one text block without the conversation-id frame
 await check('flattens the transcript into one qst and omits the system prompt by default', async () => {
   seen.length = 0
   const adapter = makeAdapter()
-  await collect(adapter.stream({ provider: 'cityu-portal', model: 'cityu-gpt5', messages: history, system: 'SYSTEM-FIELD' }))
+  await collect(adapter.stream({ provider: 'ctu-portal', model: 'ctu-gpt5', messages: history, system: 'SYSTEM-FIELD' }))
   const chat = seen.find(entry => entry.path.endsWith('/getchatresponse'))
   assert.ok(chat, 'getchatresponse was called')
   const qst = chat.body.qst
-  assert.match(qst, /^User: How do I reset my CityU portal password\?/u)
+  assert.match(qst, /^User: How do I reset my portal password\?/u)
   assert.match(qst, /Assistant: Use the password reset page\./u)
   assert.match(qst, /User: And if the link expires\?/u)
   assert.ok(!qst.includes('You are a helpful assistant'), 'system message omitted by default')
   assert.ok(!qst.includes('SYSTEM-FIELD'), 'options.system omitted by default')
-  assert.equal(chat.body.model, 'GPT', 'cityu-gpt5 maps to the wire value GPT')
+  assert.equal(chat.body.model, 'GPT', 'ctu-gpt5 maps to the wire value GPT')
   assert.equal(chat.body.id, adapter.sessionId)
   assert.equal(chat.body.style, '1', 'balanced thinking is the default style')
   assert.equal(chat.body.sessionOnly, false)
@@ -307,7 +307,7 @@ await check('flattens the transcript into one qst and omits the system prompt by
 await check('includeSystemPrompt forwards the system prompt', async () => {
   seen.length = 0
   const adapter = makeAdapter({ includeSystemPrompt: true })
-  await collect(adapter.stream({ provider: 'cityu-portal', model: 'cityu-gpt5', messages: history, system: 'SYSTEM-FIELD' }))
+  await collect(adapter.stream({ provider: 'ctu-portal', model: 'ctu-gpt5', messages: history, system: 'SYSTEM-FIELD' }))
   const qst = seen.find(entry => entry.path.endsWith('/getchatresponse')).body.qst
   assert.match(qst, /^System: SYSTEM-FIELD/u)
 })
@@ -315,7 +315,7 @@ await check('includeSystemPrompt forwards the system prompt', async () => {
 await check('opens the conversation with getchathistory before asking', async () => {
   seen.length = 0
   const adapter = makeAdapter()
-  await collect(adapter.stream({ provider: 'cityu-portal', model: 'cityu-gpt5', messages: history }))
+  await collect(adapter.stream({ provider: 'ctu-portal', model: 'ctu-gpt5', messages: history }))
   assert.deepEqual(
     seen.map(entry => entry.path.split('/').at(-1)),
     ['getchathistory', 'getchatresponse'],
@@ -330,8 +330,8 @@ await check('opens the conversation with getchathistory before asking', async ()
 await check('opens the conversation once per id, not on every turn', async () => {
   seen.length = 0
   const adapter = makeAdapter()
-  await collect(adapter.stream({ provider: 'cityu-portal', model: 'cityu-gpt5', messages: history }))
-  await collect(adapter.stream({ provider: 'cityu-portal', model: 'cityu-gpt5', messages: history }))
+  await collect(adapter.stream({ provider: 'ctu-portal', model: 'ctu-gpt5', messages: history }))
+  await collect(adapter.stream({ provider: 'ctu-portal', model: 'ctu-gpt5', messages: history }))
   assert.deepEqual(
     seen.map(entry => entry.path.split('/').at(-1)),
     ['getchathistory', 'getchatresponse', 'getchatresponse'],
@@ -341,8 +341,8 @@ await check('opens the conversation once per id, not on every turn', async () =>
 await check('reopens the conversation when the model changes', async () => {
   seen.length = 0
   const adapter = makeAdapter()
-  await collect(adapter.stream({ provider: 'cityu-portal', model: 'cityu-gpt5', messages: history }))
-  await collect(adapter.stream({ provider: 'cityu-portal', model: 'cityu-dsv4', messages: history }))
+  await collect(adapter.stream({ provider: 'ctu-portal', model: 'ctu-gpt5', messages: history }))
+  await collect(adapter.stream({ provider: 'ctu-portal', model: 'ctu-dsv4', messages: history }))
   assert.deepEqual(
     seen.map(entry => entry.path.split('/').at(-1)),
     ['getchathistory', 'getchatresponse', 'getchathistory', 'getchatresponse'],
@@ -352,7 +352,7 @@ await check('reopens the conversation when the model changes', async () => {
 await check('thinking effort is configurable', async () => {
   seen.length = 0
   const adapter = makeAdapter({ style: 'deep', sessionOnly: true })
-  await collect(adapter.stream({ provider: 'cityu-portal', model: 'cityu-dsv4', messages: history }))
+  await collect(adapter.stream({ provider: 'ctu-portal', model: 'ctu-dsv4', messages: history }))
   const chat = seen.find(entry => entry.path.endsWith('/getchatresponse'))
   assert.equal(chat.body.style, '2')
   assert.equal(chat.body.sessionOnly, true)
@@ -364,20 +364,20 @@ await check('thinking effort is configurable', async () => {
 await check('unknown model ids are forwarded verbatim', async () => {
   seen.length = 0
   const adapter = makeAdapter()
-  await collect(adapter.stream({ provider: 'cityu-portal', model: 'new-backend', messages: history }))
+  await collect(adapter.stream({ provider: 'ctu-portal', model: 'new-backend', messages: history }))
   assert.equal(seen.find(entry => entry.path.endsWith('/getchatresponse')).body.model, 'new-backend')
 })
 
 await check('reads a gzip-chunked framed body split mid-codepoint', async () => {
   const adapter = makeAdapter()
-  const chunks = await collect(adapter.stream({ provider: 'cityu-portal', model: 'GZIP', messages: history }))
+  const chunks = await collect(adapter.stream({ provider: 'ctu-portal', model: 'GZIP', messages: history }))
   const end = chunks.find(c => c.type === 'block-end')
   assert.equal(end.block.text, ANSWER)
 })
 
 await check('handles a conversation-id frame split across chunks', async () => {
   const adapter = makeAdapter()
-  const chunks = await collect(adapter.stream({ provider: 'cityu-portal', model: 'SPLITPREFIX', messages: history }))
+  const chunks = await collect(adapter.stream({ provider: 'ctu-portal', model: 'SPLITPREFIX', messages: history }))
   const end = chunks.find(c => c.type === 'block-end')
   assert.equal(end.block.text, ANSWER)
 })
@@ -385,7 +385,7 @@ await check('handles a conversation-id frame split across chunks', async () => {
 await check('a plain-text portal refusal fails CONTENT_REFUSED', async () => {
   const adapter = makeAdapter()
   await assert.rejects(
-    () => collect(adapter.stream({ provider: 'cityu-portal', model: 'REFUSALTEXT', messages: history })),
+    () => collect(adapter.stream({ provider: 'ctu-portal', model: 'REFUSALTEXT', messages: history })),
     (error) => {
       const failure = failureOf(error)
       assert.equal(failure.code, 'CONTENT_REFUSED')
@@ -398,7 +398,7 @@ await check('a plain-text portal refusal fails CONTENT_REFUSED', async () => {
 await check('a framed portal refusal also fails CONTENT_REFUSED', async () => {
   const adapter = makeAdapter()
   await assert.rejects(
-    () => collect(adapter.stream({ provider: 'cityu-portal', model: 'REFUSALFRAMED', messages: history })),
+    () => collect(adapter.stream({ provider: 'ctu-portal', model: 'REFUSALFRAMED', messages: history })),
     (error) => failureOf(error).code === 'CONTENT_REFUSED',
   )
 })
@@ -406,7 +406,7 @@ await check('a framed portal refusal also fails CONTENT_REFUSED', async () => {
 await check('the one-active-session guard fails INVALID_REQUEST and clears the claim', async () => {
   const adapter = makeAdapter()
   await assert.rejects(
-    () => collect(adapter.stream({ provider: 'cityu-portal', model: 'CONFLICT', messages: history })),
+    () => collect(adapter.stream({ provider: 'ctu-portal', model: 'CONFLICT', messages: history })),
     (error) => {
       const failure = failureOf(error)
       assert.equal(failure.code, 'INVALID_REQUEST')
@@ -420,31 +420,31 @@ await check('the one-active-session guard fails INVALID_REQUEST and clears the c
 await check('an answer without the conversation-id frame fails MALFORMED_RESPONSE', async () => {
   const adapter = makeAdapter()
   await assert.rejects(
-    () => collect(adapter.stream({ provider: 'cityu-portal', model: 'NOPREFIX', messages: history })),
+    () => collect(adapter.stream({ provider: 'ctu-portal', model: 'NOPREFIX', messages: history })),
     (error) => failureOf(error).code === 'MALFORMED_RESPONSE',
   )
 })
 
 await check('catalog exposes every model with text-only input', async () => {
   const adapter = makeAdapter()
-  const models = await adapter.listModels('cityu-portal')
+  const models = await adapter.listModels('ctu-portal')
   assert.equal(models.length, 5)
   for (const model of models) {
-    assert.equal(model.provider, 'cityu-portal')
+    assert.equal(model.provider, 'ctu-portal')
     assert.deepEqual(model.inputModalities, ['text'])
     assert.ok(model.name.length > 0)
   }
-  const resolved = await adapter.resolveModel('cityu-portal', 'cityu-dsv4')
-  assert.equal(resolved.id, 'cityu-dsv4')
-  assert.equal(resolved.name, 'CityUHK DeepSeek V4 Flash')
+  const resolved = await adapter.resolveModel('ctu-portal', 'ctu-dsv4')
+  assert.equal(resolved.id, 'ctu-dsv4')
+  assert.equal(resolved.name, 'DeepSeek V4 Flash')
   assert.deepEqual(resolved.context, { contextWindow: 32000 })
 })
 
 await check('prepareCall binds model metadata and stream', async () => {
   const adapter = makeAdapter()
-  const prepared = await adapter.prepareCall('cityu-portal', 'cityu-qwen38')
-  assert.equal(prepared.model.id, 'cityu-qwen38')
-  const chunks = await collect(prepared.stream({ provider: 'cityu-portal', model: 'cityu-qwen38', messages: history }))
+  const prepared = await adapter.prepareCall('ctu-portal', 'ctu-qwen38')
+  assert.equal(prepared.model.id, 'ctu-qwen38')
+  const chunks = await collect(prepared.stream({ provider: 'ctu-portal', model: 'ctu-qwen38', messages: history }))
   assert.equal(chunks.at(-1).type, 'finish')
 })
 
@@ -464,7 +464,7 @@ await check('a disclaimer is reported, not accepted silently', async () => {
   seen.length = 0
   const adapter = makeAdapter()
   await assert.rejects(
-    () => collect(adapter.stream({ provider: 'cityu-portal', model: 'DISCLAIMER', messages: history })),
+    () => collect(adapter.stream({ provider: 'ctu-portal', model: 'DISCLAIMER', messages: history })),
     (error) => {
       const failure = failureOf(error)
       assert.equal(failure.code, 'INVALID_REQUEST')
@@ -478,7 +478,7 @@ await check('a disclaimer is reported, not accepted silently', async () => {
 await check('acceptDisclaimer acknowledges and opens the conversation', async () => {
   seen.length = 0
   const adapter = makeAdapter({ acceptDisclaimer: true })
-  const chunks = await collect(adapter.stream({ provider: 'cityu-portal', model: 'DISCLAIMER', messages: history }))
+  const chunks = await collect(adapter.stream({ provider: 'ctu-portal', model: 'DISCLAIMER', messages: history }))
   assert.equal(chunks.find(c => c.type === 'block-end').block.text, ANSWER)
   assert.deepEqual(
     seen.map(entry => entry.path.split('/').at(-1)),
@@ -489,33 +489,33 @@ await check('acceptDisclaimer acknowledges and opens the conversation', async ()
 await check('a new user record is created after consent', async () => {
   seen.length = 0
   const adapter = makeAdapter({ acceptDisclaimer: true })
-  const chunks = await collect(adapter.stream({ provider: 'cityu-portal', model: 'NEWUSER', messages: history }))
+  const chunks = await collect(adapter.stream({ provider: 'ctu-portal', model: 'NEWUSER', messages: history }))
   assert.equal(chunks.find(c => c.type === 'block-end').block.text, ANSWER)
   assert.ok(seen.some(entry => entry.path.endsWith('/createnewuser')))
 })
 
 await check('missing cookie fails MISSING_CREDENTIAL', async () => {
-  const adapter = new CityuPortalAdapter(resolveOptions({ baseURL, cookieEnv: 'CITYU_TEST_ABSENT_COOKIE' }))
-  delete process.env.CITYU_TEST_ABSENT_COOKIE
+  const adapter = new CtuPortalAdapter(resolveOptions({ baseURL, cookieEnv: 'CTU_TEST_ABSENT_COOKIE' }))
+  delete process.env.CTU_TEST_ABSENT_COOKIE
   await assert.rejects(
-    () => collect(adapter.stream({ provider: 'cityu-portal', model: 'cityu-gpt5', messages: history })),
+    () => collect(adapter.stream({ provider: 'ctu-portal', model: 'ctu-gpt5', messages: history })),
     (error) => failureOf(error).code === 'MISSING_CREDENTIAL',
   )
 })
 
 await check('env cookie is honored', async () => {
-  process.env.CITYU_TEST_PRESENT_COOKIE = 'ENVCOOKIE=1'
+  process.env.CTU_TEST_PRESENT_COOKIE = 'ENVCOOKIE=1'
   seen.length = 0
-  const adapter = new CityuPortalAdapter(resolveOptions({ baseURL, cookieEnv: 'CITYU_TEST_PRESENT_COOKIE' }))
-  await collect(adapter.stream({ provider: 'cityu-portal', model: 'cityu-gpt5', messages: history }))
+  const adapter = new CtuPortalAdapter(resolveOptions({ baseURL, cookieEnv: 'CTU_TEST_PRESENT_COOKIE' }))
+  await collect(adapter.stream({ provider: 'ctu-portal', model: 'ctu-gpt5', messages: history }))
   assert.equal(seen[0].cookie, 'ENVCOOKIE=1')
-  delete process.env.CITYU_TEST_PRESENT_COOKIE
+  delete process.env.CTU_TEST_PRESENT_COOKIE
 })
 
 await check('401 on the session handshake fails INVALID_CREDENTIAL', async () => {
   const adapter = makeAdapter()
   await assert.rejects(
-    () => collect(adapter.stream({ provider: 'cityu-portal', model: 'AUTHFAIL', messages: history })),
+    () => collect(adapter.stream({ provider: 'ctu-portal', model: 'AUTHFAIL', messages: history })),
     (error) => { const f = failureOf(error); assert.equal(f.status, 401); return f.code === 'INVALID_CREDENTIAL' },
   )
 })
@@ -523,7 +523,7 @@ await check('401 on the session handshake fails INVALID_CREDENTIAL', async () =>
 await check('AccessDenied status fails INVALID_CREDENTIAL', async () => {
   const adapter = makeAdapter()
   await assert.rejects(
-    () => collect(adapter.stream({ provider: 'cityu-portal', model: 'DENIED', messages: history })),
+    () => collect(adapter.stream({ provider: 'ctu-portal', model: 'DENIED', messages: history })),
     (error) => {
       const f = failureOf(error)
       assert.match(f.message, /denied access/iu)
@@ -535,11 +535,11 @@ await check('AccessDenied status fails INVALID_CREDENTIAL', async () => {
 await check('a session handshake refusal names the status', async () => {
   const adapter = makeAdapter()
   await assert.rejects(
-    () => collect(adapter.stream({ provider: 'cityu-portal', model: 'REFUSED', messages: history })),
+    () => collect(adapter.stream({ provider: 'ctu-portal', model: 'REFUSED', messages: history })),
     (error) => {
       const f = failureOf(error)
       assert.match(f.message, /status "fail"/u)
-      assert.match(f.message, /Close the CityUHK Chatbot/iu)
+      assert.match(f.message, /Close the chatbot/iu)
       return f.code === 'INVALID_REQUEST'
     },
   )
@@ -548,11 +548,11 @@ await check('a session handshake refusal names the status', async () => {
 await check('a session conflict names the active session and the remedy', async () => {
   const adapter = makeAdapter()
   await assert.rejects(
-    () => collect(adapter.stream({ provider: 'cityu-portal', model: 'CONFLICT', messages: history })),
+    () => collect(adapter.stream({ provider: 'ctu-portal', model: 'CONFLICT', messages: history })),
     (error) => {
       const f = failureOf(error)
       assert.match(f.message, /active chatbot session/iu)
-      assert.match(f.message, /Close the CityUHK Chatbot/iu)
+      assert.match(f.message, /Close the chatbot/iu)
       return f.code === 'INVALID_REQUEST'
     },
   )
@@ -561,7 +561,7 @@ await check('a session conflict names the active session and the remedy', async 
 await check('empty answer fails EMPTY_RESPONSE', async () => {
   const adapter = makeAdapter()
   await assert.rejects(
-    () => collect(adapter.stream({ provider: 'cityu-portal', model: 'EMPTY', messages: history })),
+    () => collect(adapter.stream({ provider: 'ctu-portal', model: 'EMPTY', messages: history })),
     (error) => failureOf(error).code === 'EMPTY_RESPONSE',
   )
 })
@@ -569,7 +569,7 @@ await check('empty answer fails EMPTY_RESPONSE', async () => {
 await check('login page on getchatresponse fails INVALID_CREDENTIAL', async () => {
   const adapter = makeAdapter()
   await assert.rejects(
-    () => collect(adapter.stream({ provider: 'cityu-portal', model: 'HTML', messages: history })),
+    () => collect(adapter.stream({ provider: 'ctu-portal', model: 'HTML', messages: history })),
     (error) => failureOf(error).code === 'INVALID_CREDENTIAL',
   )
 })
@@ -577,7 +577,7 @@ await check('login page on getchatresponse fails INVALID_CREDENTIAL', async () =
 await check('login page on the session handshake fails INVALID_CREDENTIAL', async () => {
   const adapter = makeAdapter()
   await assert.rejects(
-    () => collect(adapter.stream({ provider: 'cityu-portal', model: 'HTMLSESSION', messages: history })),
+    () => collect(adapter.stream({ provider: 'ctu-portal', model: 'HTMLSESSION', messages: history })),
     (error) => failureOf(error).code === 'INVALID_CREDENTIAL',
   )
 })
@@ -585,7 +585,7 @@ await check('login page on the session handshake fails INVALID_CREDENTIAL', asyn
 await check('SSO redirect fails INVALID_CREDENTIAL', async () => {
   const adapter = makeAdapter()
   await assert.rejects(
-    () => collect(adapter.stream({ provider: 'cityu-portal', model: 'REDIRECT', messages: history })),
+    () => collect(adapter.stream({ provider: 'ctu-portal', model: 'REDIRECT', messages: history })),
     (error) => failureOf(error).code === 'INVALID_CREDENTIAL',
   )
 })
@@ -593,7 +593,7 @@ await check('SSO redirect fails INVALID_CREDENTIAL', async () => {
 await check('deadline fails TIMEOUT', async () => {
   const adapter = makeAdapter({ requestTimeoutMs: 200 })
   await assert.rejects(
-    () => collect(adapter.stream({ provider: 'cityu-portal', model: 'SLOW', messages: history })),
+    () => collect(adapter.stream({ provider: 'ctu-portal', model: 'SLOW', messages: history })),
     (error) => failureOf(error).code === 'TIMEOUT',
   )
 })
@@ -603,7 +603,7 @@ await check('caller abort fails ABORTED', async () => {
   const controller = new AbortController()
   setTimeout(() => controller.abort(), 100)
   await assert.rejects(
-    () => collect(adapter.stream({ provider: 'cityu-portal', model: 'SLOW', messages: history, signal: controller.signal })),
+    () => collect(adapter.stream({ provider: 'ctu-portal', model: 'SLOW', messages: history, signal: controller.signal })),
     (error) => failureOf(error).code === 'ABORTED',
   )
 })

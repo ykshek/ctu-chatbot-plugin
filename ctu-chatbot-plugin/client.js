@@ -1,10 +1,10 @@
 /**
- * CityUHK Portal Chatbot — Web client half.
+ * The portal chatbot — Web client half.
  *
  * Two surfaces, both owned by this plugin:
  *
  *   1. the configuration of its own bundle page in Plugins → Installed
- *      plugins → CityUHK portal chatbot, where the portal session cookie is
+ *      plugins → The portal chatbot, where the portal session cookie is
  *      pasted and every model's remaining quota is listed;
  *   2. a composer-dock pill showing the selected model's remaining quota, so
  *      the figure sits beside the harness performance readings.
@@ -29,7 +29,7 @@ window.__ModuleLoader__.load({
     /** Must match the package name the Host registers its descriptors under. */
     const PACKAGE = 'ctu-chatbot-plugin'
     /** Provider route the pill belongs to; any other selection hides it. */
-    const PROVIDER_ID = 'cityu-portal'
+    const PROVIDER_ID = 'ctu-portal'
     /** Refresh cadence for the pill, matching the portal widget's own freshness. */
     const POLL_MS = 30_000
     /** Locale namespace for every string this half renders. */
@@ -146,7 +146,7 @@ window.__ModuleLoader__.load({
     async function callRemote(ctx, method, argument) {
       const service = ctx.get(`remote.${SERVICE_KEY}`)
       if (service === undefined) {
-        return { ok: false, error: { message: 'The CityUHK portal chatbot host service is not available.' } }
+        return { ok: false, error: { message: 'The portal chatbot host service is not available.' } }
       }
       try {
         return argument === undefined
@@ -259,7 +259,7 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * Plugins → Installed plugins → CityUHK portal chatbot: the bundle page's
+     * Plugins → Installed plugins → The portal chatbot: the bundle page's
      * configuration section, which stores the session cookie and reads every
      * model's remaining quota.
      *

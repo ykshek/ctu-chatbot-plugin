@@ -1,10 +1,10 @@
-# CityUHK portal chatbot adapter
+# The portal chatbot adapter
 
-Adds the City University of Hong Kong CityUHK Chatbot (`www.cityu.edu.hk/portal`)
-to DeepSeek Harness as the text-only LLM provider `cityu-portal`.
+Adds the portal chatbot (`www.cityu.edu.hk/portal`)
+to DeepSeek Harness as the text-only LLM provider `ctu-portal`.
 
 **Configure it here.** This window belongs to the plugin's own page
-(**Plugins → Installed plugins → CityUHK portal chatbot**). Below this document
+(**Plugins → Installed plugins → The portal chatbot**). Below this document
 the page holds the **Portal session** field, where the portal cookie is pasted,
 and the table of every model's remaining quota.
 
@@ -32,7 +32,7 @@ out-of-scope questions with the IT Service Desk fallback (the Chinese
 The adapter flattens the harness history into the one `qst` string:
 
 ```
-User: How do I reset my CityU portal password?
+User: How do I reset my portal password?
 
 Assistant: …
 
@@ -60,11 +60,11 @@ The portal's model selector values are exposed as harness model ids:
 
 | Harness model id | Portal `model` | Backend |
 | --- | --- | --- |
-| `cityu-it-portal` | `IT-Portal` | legacy IT knowledge-base route (not in the GenAI selector; kept for compatibility) |
-| `cityu-gpt5-mini` | `GPTmini` | GPT-5 mini |
-| `cityu-gpt5` | `GPT` | GPT-5.2 |
-| `cityu-dsv4` | `DSV4` | DeepSeek V4 Flash |
-| `cityu-qwen38` | `QWen38` | Qwen3.8-Flash-Next |
+| `ctu-it-portal` | `IT-Portal` | legacy IT knowledge-base route (not in the GenAI selector; kept for compatibility) |
+| `ctu-gpt5-mini` | `GPTmini` | GPT-5 mini |
+| `ctu-gpt5` | `GPT` | GPT-5.2 |
+| `ctu-dsv4` | `DSV4` | DeepSeek V4 Flash |
+| `ctu-qwen38` | `QWen38` | Qwen3.8-Flash-Next |
 
 Any other model id is forwarded to the portal verbatim, so a newly added
 backend can be tried without updating this bundle. All models declare
@@ -79,7 +79,7 @@ The plugin reads its config from the bundle patch and/or the profile's
 | --- | --- | --- |
 | `baseURL` | `https://www.cityu.edu.hk/portal/api/module/chatbot` | GenAI chatbot API root (chat and quota) |
 | `quotaBaseURL` | *(same as `baseURL`)* | quota API root, when a portal puts it elsewhere |
-| `cookieEnv` | `CITYU_PORTAL_COOKIE` | credential reference and environment fallback for the session cookie |
+| `cookieEnv` | `CTU_PORTAL_COOKIE` | credential reference and environment fallback for the session cookie |
 | `cookie` | *(empty)* | literal cookie value; takes priority over the stored credential |
 | `sessionId` | *(random UUID)* | fixed conversation id across restarts |
 | `style` | `"1"` | portal thinking effort: `"0"` quick, `"1"` balanced, `"2"` deep (names `quick`/`balanced`/`deep` also work) |
@@ -126,7 +126,7 @@ sees it. The value can be several kilobytes long; paste all of it.
 
 #### Paste it on the plugin's page
 
-**Bundle page (normal path).** Open **Plugins → Installed plugins → CityUHK
+**Bundle page (normal path).** Open **Plugins → Installed plugins → The
 portal chatbot**, paste the value into the page's **Portal session** field, and
 press **Save**. The plugin stores it as a credential record rather than in
 configuration, verifies it against the portal, and reports whether it is
@@ -138,7 +138,7 @@ value never appears in `cordis.patch.yml`.
 takes priority and an unset environment fallback becomes effective again:
 
 ```bash
-export CITYU_PORTAL_COOKIE='<cookie>'
+export CTU_PORTAL_COOKIE='<cookie>'
 ```
 
 **Literal value in the profile patch.** Add this entry to
@@ -150,7 +150,7 @@ without a restart, but the secret then lives in that file:
   name: "ctu-chatbot-plugin"
   config:
     cookie: '<cookie>'
-    cookieEnv: CITYU_PORTAL_COOKIE
+    cookieEnv: CTU_PORTAL_COOKIE
 ```
 
 The cookie is a session credential. Treat it like a password and expect it to
@@ -164,7 +164,7 @@ dashboard carries its own allowance. The plugin reads it from
 `api/module/chatbot/getusage` by naming the model in the request body, which is
 the same request the portal's own dashboard widget makes.
 
-- **Plugins → Installed plugins → CityUHK portal chatbot** lists every model
+- **Plugins → Installed plugins → The portal chatbot** lists every model
   with its remaining quota and reset date, refreshed on demand.
 - The **composer dock** gains a `Quota: <left> / <quota>` pill for the selected
   model, refreshed every 30 seconds. It is hidden unless the session's model
@@ -237,4 +237,4 @@ pill and the decode-speed figure show.
   chunk.
 - `lib/models.js` — model catalog and wire mapping.
 - `lib/config.js` — option normalization.
-- `lib/errors.js` — `CityuPortalError` with harness-compatible `code`/`failure`.
+- `lib/errors.js` — `CtuPortalError` with harness-compatible `code`/`failure`.

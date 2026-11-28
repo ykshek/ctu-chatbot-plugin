@@ -9,7 +9,7 @@
  */
 
 import { createServer } from 'node:http'
-import { CityuPortalAdapter } from './ctu-chatbot-plugin/lib/adapter.js'
+import { CtuPortalAdapter } from './ctu-chatbot-plugin/lib/adapter.js'
 import { resolveOptions } from './ctu-chatbot-plugin/lib/config.js'
 
 const QUOTAS = { GPTmini: 45000, GPT: 15000, DSV4: 90000, QWen38: 90000 }
@@ -71,9 +71,9 @@ function check(label, condition, detail) {
 
 // 1. Usage chunk from a chat call.
 {
-  const adapter = new CityuPortalAdapter(resolveOptions({ baseURL: `${base}/chatbot`, quotaBaseURL: quotaBase, cookie: 'a=b' }))
+  const adapter = new CtuPortalAdapter(resolveOptions({ baseURL: `${base}/chatbot`, quotaBaseURL: quotaBase, cookie: 'a=b' }))
   const chunks = []
-  for await (const chunk of adapter.stream({ model: 'cityu-dsv4', messages: [{ role: 'user', content: [{ type: 'text', text: 'hi there' }] }] })) {
+  for await (const chunk of adapter.stream({ model: 'ctu-dsv4', messages: [{ role: 'user', content: [{ type: 'text', text: 'hi there' }] }] })) {
     chunks.push(chunk)
   }
   const usageIndex = chunks.findIndex(c => c.type === 'usage')
@@ -91,7 +91,7 @@ function check(label, condition, detail) {
 
 // 2. One model's quota.
 {
-  const adapter = new CityuPortalAdapter(resolveOptions({ baseURL: `${base}/chatbot`, quotaBaseURL: quotaBase, cookie: 'a=b' }))
+  const adapter = new CtuPortalAdapter(resolveOptions({ baseURL: `${base}/chatbot`, quotaBaseURL: quotaBase, cookie: 'a=b' }))
   const reading = await adapter.readQuota('GPT')
   console.log('2. readQuota')
   check('quota read', reading.quota === 15000, reading.quota)
@@ -104,7 +104,7 @@ function check(label, condition, detail) {
 
 // 3. Every model's quota.
 {
-  const adapter = new CityuPortalAdapter(resolveOptions({ baseURL: `${base}/chatbot`, quotaBaseURL: quotaBase, cookie: 'a=b', quotaCacheMs: 1000 }))
+  const adapter = new CtuPortalAdapter(resolveOptions({ baseURL: `${base}/chatbot`, quotaBaseURL: quotaBase, cookie: 'a=b', quotaCacheMs: 1000 }))
   const answer = await adapter.readAllQuotas()
   console.log('3. readAllQuotas')
   const wires = Object.keys(answer.readings)
@@ -117,7 +117,7 @@ function check(label, condition, detail) {
 // 4. Cookie from the credential reader (bundle page path).
 {
   let reads = 0
-  const adapter = new CityuPortalAdapter(
+  const adapter = new CtuPortalAdapter(
     resolveOptions({ baseURL: `${base}/chatbot`, quotaBaseURL: quotaBase }),
     { credentialReader: async () => { reads += 1; return 'stored=1' } },
   )
@@ -129,7 +129,7 @@ function check(label, condition, detail) {
 
 // 5. The settings probe: LAST resolves the most recently used model.
 {
-  const adapter = new CityuPortalAdapter(resolveOptions({ baseURL: `${base}/chatbot`, quotaBaseURL: quotaBase, cookie: 'a=b' }))
+  const adapter = new CtuPortalAdapter(resolveOptions({ baseURL: `${base}/chatbot`, quotaBaseURL: quotaBase, cookie: 'a=b' }))
   const reading = await adapter.readQuota('LAST')
   console.log('5. settings probe')
   check('LAST resolves the reading', reading.quota === 90000, reading.quota)
@@ -139,14 +139,14 @@ function check(label, condition, detail) {
 
 // 6. No cookie anywhere.
 {
-  const adapter = new CityuPortalAdapter(resolveOptions({ baseURL: `${base}/chatbot`, quotaBaseURL: quotaBase, cookieEnv: 'CTU_VERIFY_ABSENT' }))
+  const adapter = new CtuPortalAdapter(resolveOptions({ baseURL: `${base}/chatbot`, quotaBaseURL: quotaBase, cookieEnv: 'CTU_VERIFY_ABSENT' }))
   console.log('6. missing credential')
   try {
     await adapter.readQuota('GPT')
     check('throws when unconfigured', false)
   } catch (error) {
     check('throws MISSING_CREDENTIAL', error.code === 'MISSING_CREDENTIAL', error.code)
-    check('message names the bundle page', /Plugins → Installed plugins → CityUHK portal chatbot/u.test(error.message), error.message.slice(0, 140))
+    check('message names the bundle page', /Plugins → Installed plugins → The portal chatbot/u.test(error.message), error.message.slice(0, 140))
   }
 }
 

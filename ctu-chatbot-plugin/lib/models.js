@@ -1,5 +1,5 @@
 /**
- * Harness-facing model catalog for the CityUHK portal chatbot.
+ * Harness-facing model catalog for the portal chatbot.
  *
  * The portal selects its answer backend with a single `model` string. These
  * ids are the model selector's own values (`kb-chatbot.js` defaults to
@@ -9,10 +9,10 @@
  */
 
 /** Provider route owned by this plugin. */
-export const PROVIDER_ID = 'cityu-portal'
+export const PROVIDER_ID = 'ctu-portal'
 
 /** Model selected when a request does not name one. */
-export const DEFAULT_MODEL_ID = 'cityu-it-portal'
+export const DEFAULT_MODEL_ID = 'ctu-it-portal'
 
 /**
  * @typedef {object} ModelEntry
@@ -25,34 +25,34 @@ export const DEFAULT_MODEL_ID = 'cityu-it-portal'
 /** @type {readonly ModelEntry[]} */
 export const MODELS = Object.freeze([
   Object.freeze({
-    id: 'cityu-it-portal',
+    id: 'ctu-it-portal',
     wire: 'IT-Portal',
-    name: 'CityUHK IT Portal',
-    description: 'CityUHK IT-portal knowledge-base assistant (the portal default route).',
+    name: 'IT Portal',
+    description: 'IT-portal knowledge-base assistant (the portal default route).',
   }),
   Object.freeze({
-    id: 'cityu-gpt5-mini',
+    id: 'ctu-gpt5-mini',
     wire: 'GPTmini',
-    name: 'CityUHK GPT-5 mini',
-    description: 'CityUHK IT-portal assistant answered by GPT-5 mini.',
+    name: 'GPT-5 mini',
+    description: 'IT-portal assistant answered by GPT-5 mini.',
   }),
   Object.freeze({
-    id: 'cityu-gpt5',
+    id: 'ctu-gpt5',
     wire: 'GPT',
-    name: 'CityUHK GPT-5.2',
-    description: 'CityUHK IT-portal assistant answered by GPT-5.2.',
+    name: 'GPT-5.2',
+    description: 'IT-portal assistant answered by GPT-5.2.',
   }),
   Object.freeze({
-    id: 'cityu-dsv4',
+    id: 'ctu-dsv4',
     wire: 'DSV4',
-    name: 'CityUHK DeepSeek V4 Flash',
-    description: 'CityUHK IT-portal assistant answered by DeepSeek V4 Flash.',
+    name: 'DeepSeek V4 Flash',
+    description: 'IT-portal assistant answered by DeepSeek V4 Flash.',
   }),
   Object.freeze({
-    id: 'cityu-qwen38',
+    id: 'ctu-qwen38',
     wire: 'QWen38',
-    name: 'CityUHK Qwen3.8 Flash',
-    description: 'CityUHK IT-portal assistant answered by Qwen3.8-Flash-Next.',
+    name: 'Qwen3.8 Flash',
+    description: 'IT-portal assistant answered by Qwen3.8-Flash-Next.',
   }),
 ])
 

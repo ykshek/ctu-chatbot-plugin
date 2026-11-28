@@ -1,5 +1,5 @@
 /**
- * HTTP transport for the CityUHK portal's GenAI chatbot protocol.
+ * HTTP transport for the portal's GenAI chatbot protocol.
  *
  * Verified against the portal's own module (`/portal/modules/chatbot/mod-chatbot.js`):
  *
@@ -24,7 +24,7 @@
 
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { CityuPortalError } from './errors.js'
+import { CtuPortalError } from './errors.js'
 
 const PRODUCT = 'deepseek-harness'
 const HOME_URL = 'https://github.com/deepseek-ai/deepseek-harness'
@@ -187,15 +187,15 @@ async function readHistory({ baseURL, cookie, id, model, style, sessionOnly, sig
   try {
     parsed = JSON.parse(text)
   } catch (cause) {
-    throw new CityuPortalError(
-      'CityUHK portal returned a non-JSON session response',
+    throw new CtuPortalError(
+      'The portal returned a non-JSON session response',
       'MALFORMED_RESPONSE',
       { status: response.status, cause },
     )
   }
   if (parsed === null || typeof parsed !== 'object') {
-    throw new CityuPortalError(
-      'CityUHK portal returned an unrecognized session response',
+    throw new CtuPortalError(
+      'The portal returned an unrecognized session response',
       'MALFORMED_RESPONSE',
       { status: response.status },
     )
@@ -271,8 +271,8 @@ export async function* chatStream({ baseURL, cookie, id, model, qst, style, sess
   }
   if (looksLikeLoginPage(response, '')) throw loginPageFailure()
   if (response.body === null) {
-    throw new CityuPortalError(
-      'CityUHK portal returned no response body',
+    throw new CtuPortalError(
+      'The portal returned no response body',
       'EMPTY_RESPONSE',
       { status: response.status },
     )
@@ -305,8 +305,8 @@ export async function* chatStream({ baseURL, cookie, id, model, qst, style, sess
       }
       const conversationId = untagged.slice(0, separator).trim()
       if (conversationId === '') {
-        throw new CityuPortalError(
-          'CityUHK portal returned an empty conversation id before its answer',
+        throw new CtuPortalError(
+          'The portal returned an empty conversation id before its answer',
           'MALFORMED_RESPONSE',
         )
       }
@@ -396,8 +396,8 @@ export async function getUsage({
   try {
     return JSON.parse(text)
   } catch (cause) {
-    throw new CityuPortalError(
-      'CityUHK portal returned a non-JSON quota response',
+    throw new CtuPortalError(
+      'The portal returned a non-JSON quota response',
       'MALFORMED_RESPONSE',
       { status: response.status, cause },
     )
@@ -430,10 +430,10 @@ function looksLikeBlockPage(body) {
   return /incident_id|_incapsula_resource/iu.test(body.slice(0, 4096))
 }
 
-/** @returns {CityuPortalError} */
+/** @returns {CtuPortalError} */
 function loginPageFailure() {
-  return new CityuPortalError(
-    'CityUHK portal returned its sign-in page instead of a chatbot answer. '
+  return new CtuPortalError(
+    'The portal returned its sign-in page instead of a chatbot answer. '
     + 'The session cookie is missing or expired; sign in to the portal again and copy a fresh Cookie header value.',
     'INVALID_CREDENTIAL',
   )
@@ -443,42 +443,42 @@ function loginPageFailure() {
  * Classify an HTTP failure into a harness failure code.
  * @param {number} status
  * @param {string} body
- * @returns {CityuPortalError}
+ * @returns {CtuPortalError}
  */
 function httpFailure(status, body) {
   const detail = body.trim().slice(0, 300)
   const suffix = detail === '' ? '' : `: ${detail}`
   if (status === 401 || status === 403) {
     if (looksLikeBlockPage(body)) {
-      return new CityuPortalError(
-        'CityUHK portal\'s edge filter blocked the request. Sign in to the portal again and '
+      return new CtuPortalError(
+        'The portal\'s edge filter blocked the request. Sign in to the portal again and '
         + 'paste a fresh Cookie header value, including the incap_ses_* and reese84 cookies.',
         'INVALID_CREDENTIAL',
         { status },
       )
     }
-    return new CityuPortalError(
-      'CityUHK portal rejected the session cookie. Sign in to the portal again and copy a fresh Cookie header value.',
+    return new CtuPortalError(
+      'The portal rejected the session cookie. Sign in to the portal again and copy a fresh Cookie header value.',
       'INVALID_CREDENTIAL',
       { status },
     )
   }
   if (status === 429) {
-    return new CityuPortalError(
-      `CityUHK portal is rate limiting requests (HTTP 429)${suffix}`,
+    return new CtuPortalError(
+      `The portal is rate limiting requests (HTTP 429)${suffix}`,
       'RATE_LIMIT',
       { status },
     )
   }
   if (status >= 500) {
-    return new CityuPortalError(
-      `CityUHK portal failed (HTTP ${status})${suffix}`,
+    return new CtuPortalError(
+      `The portal failed (HTTP ${status})${suffix}`,
       'SERVER',
       { status },
     )
   }
-  return new CityuPortalError(
-    `CityUHK portal rejected the request (HTTP ${status})${suffix}`,
+  return new CtuPortalError(
+    `The portal rejected the request (HTTP ${status})${suffix}`,
     'INVALID_REQUEST',
     { status },
   )
@@ -489,13 +489,13 @@ function httpFailure(status, body) {
  * rather than an HTTP 401. Name it so the harness offers the credential fix
  * instead of the generic refusal text.
  * @param {unknown} parsed
- * @returns {CityuPortalError | undefined}
+ * @returns {CtuPortalError | undefined}
  */
 function accessDeniedFailure(parsed) {
   const status = typeof parsed?.status === 'string' ? parsed.status : ''
   if (!/^accessdenied$/iu.test(status)) return undefined
-  return new CityuPortalError(
-    'CityUHK portal denied access to the chatbot. Sign in to the portal again and copy a fresh Cookie header value.',
+  return new CtuPortalError(
+    'The portal denied access to the chatbot. Sign in to the portal again and copy a fresh Cookie header value.',
     'INVALID_CREDENTIAL',
   )
 }
@@ -504,7 +504,7 @@ function accessDeniedFailure(parsed) {
  * Explain why the portal would not start a conversation.
  * @param {unknown} parsed
  * @param {string} body
- * @returns {CityuPortalError}
+ * @returns {CtuPortalError}
  */
 function sessionFailure(parsed, body) {
   const denied = accessDeniedFailure(parsed)
@@ -522,9 +522,9 @@ function sessionFailure(parsed, body) {
     : status !== undefined
       ? `the portal returned status "${status}"`
       : `the portal returned an unrecognized response (${body.trim().slice(0, 200)})`
-  return new CityuPortalError(
-    `CityUHK portal could not start a conversation: ${reason}. `
-    + 'Close the CityUHK Chatbot in any other browser tab and retry; if it still fails, '
+  return new CtuPortalError(
+    `The portal could not start a conversation: ${reason}. `
+    + 'Close the chatbot in any other browser tab and retry; if it still fails, '
     + 'sign in to the portal again and paste a fresh Cookie header value.',
     'INVALID_REQUEST',
   )
@@ -534,12 +534,12 @@ function sessionFailure(parsed, body) {
  * The portal's one-active-conversation guard. It arrives as plain text on the
  * answer stream, not as a JSON status.
  * @param {string} [detail]
- * @returns {CityuPortalError}
+ * @returns {CtuPortalError}
  */
 function sessionConflictFailure(detail) {
-  return new CityuPortalError(
-    'CityUHK portal already has an active chatbot session for this account. '
-    + 'Close the CityUHK Chatbot in your browser (or wait 5 minutes) and retry.'
+  return new CtuPortalError(
+    'The portal already has an active chatbot session for this account. '
+    + 'Close the chatbot in your browser (or wait 5 minutes) and retry.'
     + (detail === undefined || detail === '' ? '' : ` (${detail})`),
     'INVALID_REQUEST',
   )
@@ -550,19 +550,19 @@ function sessionConflictFailure(detail) {
  * accept the portal's GenAI disclaimer before its first answer.
  * @param {string} status
  * @param {boolean} [stillShown] - the portal kept asking after the acknowledgement.
- * @returns {CityuPortalError}
+ * @returns {CtuPortalError}
  */
 function disclaimerFailure(status, stillShown = false) {
   if (stillShown) {
-    return new CityuPortalError(
-      'CityUHK portal kept asking for its GenAI disclaimer after the acknowledgement. '
+    return new CtuPortalError(
+      'The portal kept asking for its GenAI disclaimer after the acknowledgement. '
       + 'Open https://www.cityu.edu.hk/portal/category/5 and accept the disclaimer manually, then retry.',
       'INVALID_REQUEST',
     )
   }
-  return new CityuPortalError(
-    `CityUHK portal requires accepting its GenAI disclaimer before the first conversation (status: ${status}). `
-    + 'Open https://www.cityu.edu.hk/portal/category/5, start the CityUHK Chatbot, and accept the disclaimer once; then retry. '
+  return new CtuPortalError(
+    `The portal requires accepting its GenAI disclaimer before the first conversation (status: ${status}). `
+    + 'Open https://www.cityu.edu.hk/portal/category/5, start the chatbot, and accept the disclaimer once; then retry. '
     + 'Set acceptDisclaimer: true to let the plugin accept it automatically.',
     'INVALID_REQUEST',
   )
@@ -572,23 +572,23 @@ function disclaimerFailure(status, stillShown = false) {
  * The portal's canned IT knowledge-base fallback. It is a product of the
  * legacy `kbchatbot` route or an out-of-scope question, never a usable answer.
  * @param {string} text
- * @returns {CityuPortalError}
+ * @returns {CtuPortalError}
  */
 function refusalFailure(text) {
   const snippet = text.trim().slice(0, 240)
-  return new CityuPortalError(
-    `CityUHK portal refused to answer: ${snippet}`,
+  return new CtuPortalError(
+    `The portal refused to answer: ${snippet}`,
     'CONTENT_REFUSED',
   )
 }
 
 /**
  * Plain-text access-denied body, when the portal does not wrap it in JSON.
- * @returns {CityuPortalError}
+ * @returns {CtuPortalError}
  */
 function accessDeniedTextFailure() {
-  return new CityuPortalError(
-    'CityUHK portal denied access to the chatbot. Sign in to the portal again and copy a fresh Cookie header value.',
+  return new CtuPortalError(
+    'The portal denied access to the chatbot. Sign in to the portal again and copy a fresh Cookie header value.',
     'INVALID_CREDENTIAL',
   )
 }
@@ -597,21 +597,21 @@ function accessDeniedTextFailure() {
  * Classify a body that ended before the conversation-id frame. A normal answer
  * always starts with `<id>,,,`; an error arrives as plain text instead.
  * @param {string} text
- * @returns {CityuPortalError}
+ * @returns {CtuPortalError}
  */
 function unframedFailure(text) {
   const body = text.trim()
   if (body === '') {
-    return new CityuPortalError(
-      'CityUHK portal returned an empty response body',
+    return new CtuPortalError(
+      'The portal returned an empty response body',
       'EMPTY_RESPONSE',
     )
   }
   if (ACTIVE_SESSION.test(body)) return sessionConflictFailure()
   if (PORTAL_REFUSAL.test(body)) return refusalFailure(body)
   if (ACCESS_DENIED_TEXT.test(body) && body.length < 200) return accessDeniedTextFailure()
-  return new CityuPortalError(
-    `CityUHK portal returned an answer without its conversation-id prefix: ${body.slice(0, 200)}`,
+  return new CtuPortalError(
+    `The portal returned an answer without its conversation-id prefix: ${body.slice(0, 200)}`,
     'MALFORMED_RESPONSE',
   )
 }

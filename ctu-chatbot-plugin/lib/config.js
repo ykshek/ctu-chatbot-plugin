@@ -1,5 +1,5 @@
 /**
- * Configuration defaults and normalization for the CityUHK portal adapter.
+ * Configuration defaults and normalization for the portal adapter.
  *
  * The plugin deliberately exports no `Config` schema: cordis only validates a
  * plugin `Config` through `~standard`, which would require a schemastery
@@ -33,7 +33,7 @@ export const DEFAULT_STYLE = '1'
 export const DEFAULT_QUOTA_CACHE_MS = 30_000
 
 /** Environment variable a bare installation reads the session cookie from. */
-export const DEFAULT_COOKIE_ENV = 'CITYU_PORTAL_COOKIE'
+export const DEFAULT_COOKIE_ENV = 'CTU_PORTAL_COOKIE'
 
 /** Conservative declared context so the harness compacts before the portal truncates. */
 export const DEFAULT_CONTEXT_WINDOW = 32_000
@@ -45,7 +45,7 @@ export const DEFAULT_REQUEST_TIMEOUT_MS = 120_000
 export const DEFAULT_MAX_QUESTION_CHARS = 24_000
 
 /**
- * @typedef {object} CityuOptions
+ * @typedef {object} CtuOptions
  * @property {string} baseURL
  * @property {string} quotaBaseURL
  * @property {string} cookie - literal cookie value, when configured.
@@ -64,7 +64,7 @@ export const DEFAULT_MAX_QUESTION_CHARS = 24_000
 /**
  * Normalize the loader-supplied config object.
  * @param {Record<string, unknown> | undefined} raw
- * @returns {CityuOptions}
+ * @returns {CtuOptions}
  */
 export function resolveOptions(raw) {
   const config = raw ?? {}

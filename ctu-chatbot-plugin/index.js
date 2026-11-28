@@ -1,9 +1,9 @@
 /**
- * CityUHK Portal Chatbot — a DeepSeek Harness LLM adapter plugin.
+ * The portal chatbot — a DeepSeek Harness LLM adapter plugin.
  *
- * The CityUHK GenAI chatbot (`/portal/category/5`) answers over the portal's
+ * The GenAI chatbot (`/portal/category/5`) answers over the portal's
  * proprietary JSON + framed-markdown protocol, not an OpenAI-compatible one.
- * This bundle adapts it to the harness LLM seam as provider `cityu-portal`:
+ * This bundle adapts it to the harness LLM seam as provider `ctu-portal`:
  *
  *   - `apply` registers exactly one provider route with the `llm` service;
  *   - the adapter maps harness messages onto the portal's single `qst` string,
@@ -27,13 +27,13 @@
 
 import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import { z } from 'zod'
-import { CityuPortalAdapter } from './lib/adapter.js'
+import { CtuPortalAdapter } from './lib/adapter.js'
 import { resolveOptions } from './lib/config.js'
 import { MODELS, PROVIDER_ID, wireModel } from './lib/models.js'
 import { normalizeCookie } from './lib/protocol.js'
 
 /** Cordis plugin name shown in loader diagnostics. */
-export const name = 'llm-cityu-portal'
+export const name = 'llm-ctu-portal'
 
 /**
  * The LLM seam is required; the plugin stays pending until it exists. `typert`
@@ -136,7 +136,7 @@ const REFLECTION = Object.freeze({ services: [], events: [], objects: [] })
 export class CtuQuotaService extends TypertRemoteService {
   /**
    * @param {import('@deepseek-ai/cordis').Context} ctx - owning context.
-   * @param {{ adapter: CityuPortalAdapter, cookieEnv: string }} config
+   * @param {{ adapter: CtuPortalAdapter, cookieEnv: string }} config
    */
   constructor(ctx, config) {
     super(ctx, SERVICE_KEY)
@@ -237,14 +237,14 @@ export class CtuQuotaService extends TypertRemoteService {
 }
 
 /**
- * Register the CityUHK provider, the quota Remote methods, and the credential
+ * Register the portal provider, the quota Remote methods, and the credential
  * reader the adapter resolves cookies through.
  * @param {import('@deepseek-ai/cordis').Context} ctx - host plugin context.
  * @param {Record<string, unknown> | undefined} config - loader-supplied config.
  */
 export function apply(ctx, config) {
   const options = resolveOptions(config)
-  const adapter = new CityuPortalAdapter(options, {
+  const adapter = new CtuPortalAdapter(options, {
     // Read through the credential seam per request, so a cookie saved on the
     // plugin's bundle page reaches the next call without restarting the plugin.
     credentialReader: async () => (await ctx.credentials.resolve(options.cookieEnv))?.value,
@@ -273,7 +273,7 @@ export function apply(ctx, config) {
     })
   }, 'ctu-chatbot-plugin: quota Remote methods')
   ctx.logger?.info?.(
-    `llm-cityu-portal: registered provider "${PROVIDER_ID}" with `
+    `llm-ctu-portal: registered provider "${PROVIDER_ID}" with `
     + `${MODELS.length} models (cookie credential ${options.cookieEnv})`,
   )
 }

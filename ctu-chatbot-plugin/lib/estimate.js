@@ -1,7 +1,7 @@
 /**
  * Token estimation for a provider that reports no token counts.
  *
- * The CityUHK portal streams answer text and reports consumption only in its
+ * The portal streams answer text and reports consumption only in its
  * own "words" unit on the dashboard; it never returns prompt or completion
  * tokens. The harness, however, only fills the Usage pill, the decode-time
  * figure, and tokens-per-second from a `usage` chunk the adapter emits. This

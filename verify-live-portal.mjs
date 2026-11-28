@@ -1,33 +1,33 @@
 /**
- * Live-portal verification for the CityUHK portal adapter.
+ * Live-portal verification for the portal adapter.
  *
- * Instantiates the REAL `CityuPortalAdapter` and drives its `stream()` method
+ * Instantiates the REAL `CtuPortalAdapter` and drives its `stream()` method
  * end-to-end against the live portal, using the session cookie from the
- * CITYU_PORTAL_COOKIE environment variable. This confirms the `chatbot` module
+ * CTU_PORTAL_COOKIE environment variable. This confirms the `chatbot` module
  * transport (getchathistory session handshake + framed getchatresponse) works
  * from the host process, and that the answer is not the portal's canned IT
  * Service Desk fallback (which a non-empty-text check would wrongly accept).
  *
- * Run:  CITYU_PORTAL_COOKIE='<cookie header>' node verify-live-portal.mjs
+ * Run:  CTU_PORTAL_COOKIE='<cookie header>' node verify-live-portal.mjs
  *
  * Note: makes one real chat request (consumes a little quota, opens a
  * conversation on the portal).
  */
 
-import { CityuPortalAdapter } from './ctu-chatbot-plugin/lib/adapter.js'
+import { CtuPortalAdapter } from './ctu-chatbot-plugin/lib/adapter.js'
 import { resolveOptions } from './ctu-chatbot-plugin/lib/config.js'
 
 // Defaults supply the endpoint, context window, deadlines, and the quota
 // endpoint, so this stays correct as options are added.
-const adapter = new CityuPortalAdapter(resolveOptions({
-  cookieEnv: 'CITYU_PORTAL_COOKIE', // cookie stays empty, so it is read from the environment
+const adapter = new CtuPortalAdapter(resolveOptions({
+  cookieEnv: 'CTU_PORTAL_COOKIE', // cookie stays empty, so it is read from the environment
 }))
 
 console.log('adapter.sessionId (should be a UUID):', adapter.sessionId)
 
 const options = {
   signal: AbortSignal.timeout(90000),
-  model: 'cityu-dsv4', // -> wire "DSV4"
+  model: 'ctu-dsv4', // -> wire "DSV4"
   messages: [
     { role: 'user', content: [{ type: 'text', text: 'Hello, what time is it?' }] },
   ],

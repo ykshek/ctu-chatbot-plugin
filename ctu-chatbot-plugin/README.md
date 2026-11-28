@@ -1,6 +1,6 @@
 # ctu-chatbot-plugin
 
-DeepSeek Harness LLM provider for the CityUHK GenAI chatbot (the model selector
+DeepSeek Harness LLM provider for the GenAI chatbot (the model selector
 on `www.cityu.edu.hk/portal/category/5`).
 
 ## Install
@@ -18,7 +18,7 @@ directory (`ctu-chatbot-plugin/`) as the add target, or use `plugin_manager`
 `action: install_bundle` with that directory as `target`.
 
 The portal authenticates with a browser session cookie. After installing, open
-**Plugins → Installed plugins → CityUHK portal chatbot**, paste the `Cookie`
+**Plugins → Installed plugins → The portal chatbot**, paste the `Cookie`
 request header from a signed-in portal request, and press **Save**. That page
 also lists every model's remaining portal quota, and the composer dock shows
 the selected model's quota as a pill.
@@ -26,11 +26,11 @@ the selected model's quota as a pill.
 For a headless install the same credential can come from the environment:
 
 ```bash
-export CITYU_PORTAL_COOKIE='<Cookie header from a signed-in portal tab>'
+export CTU_PORTAL_COOKIE='<Cookie header from a signed-in portal tab>'
 ```
 
 See [`docs/DETAIL.md`](docs/DETAIL.md) for the protocol, model list, options,
 quota and usage readings, failure mapping, and limitations.
 
 After installing, pick the provider's models in **Settings → Models** (or set
-`agent-default-model` to `cityu-portal` / `cityu-dsv4`).
+`agent-default-model` to `ctu-portal` / `ctu-dsv4`).
