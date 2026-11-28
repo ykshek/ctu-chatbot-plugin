@@ -1,6 +1,6 @@
 {
   "name": "ctu-chatbot-plugin",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "private": false,
   "description": "The IT-portal chatbot as a text-only DeepSeek Harness LLM provider.",
   "keywords": [
