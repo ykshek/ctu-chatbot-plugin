@@ -129,6 +129,8 @@ export class CityuPortalAdapter {
     this.credentialReader = auth.credentialReader
     /** Stable conversation id for this adapter generation. */
     this.sessionId = options.sessionId !== '' ? options.sessionId : randomUUID()
+    /** Conversation id the portal has already been asked to claim, if any. */
+    this.claimedSessionId = undefined
   }
 
   /**
@@ -223,13 +225,21 @@ export class CityuPortalAdapter {
       }
       const model = wireModel(options.model)
 
-      await startNewConversation({
-        baseURL: this.options.baseURL,
-        cookie,
-        id: this.sessionId,
-        model,
-        signal,
-      })
+      // The portal's own widget claims a conversation once, on load, and then
+      // asks questions against that id; only its "clear conversation" button
+      // calls `startnewconversation` again. Claiming on every turn trips the
+      // portal's one-active-session guard for no benefit, so claim only when
+      // the id changes (first turn of a process, or after a failed claim).
+      if (this.claimedSessionId !== this.sessionId) {
+        await startNewConversation({
+          baseURL: this.options.baseURL,
+          cookie,
+          id: this.sessionId,
+          model,
+          signal,
+        })
+        this.claimedSessionId = this.sessionId
+      }
 
       const chunks = []
       yield { type: 'block-start', index: 0, blockType: 'text' }
