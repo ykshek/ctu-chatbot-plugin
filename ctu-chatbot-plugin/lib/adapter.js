@@ -5,17 +5,24 @@
  * `prepareCall`, `resolveModel`, `listModels`, `stream`), so this class needs no
  * import of `@deepseek-ai/dsh-llm` and stays resolvable from the profile.
  *
- * The portal is a single-turn RAG assistant, not a chat-completions model:
- *   - every call sends one flattened `qst` string; there is no server-side memory,
+ * The portal is a GenAI chat endpoint, not a chat-completions model:
+ *   - every call sends one flattened `qst` string; the portal also keeps its
+ *     own server-side transcript for the active conversation,
  *   - there are no tools, images, reasoning channels, or usage counters,
- *   - the answer is markdown streamed as text, mapped to one text block.
+ *   - the answer is markdown framed as `<conversation-id>,,,<markdown>` and is
+ *     mapped to one text block.
+ *
+ * The portal's page opens a conversation with `getchathistory` and only then
+ * asks questions. This adapter mirrors that lifecycle: the first turn claims
+ * the conversation, later turns reuse it, and a first-time account is told to
+ * accept the portal's GenAI disclaimer unless `acceptDisclaimer` is set.
  */
 
 import { randomUUID } from 'node:crypto'
 import { CityuPortalError } from './errors.js'
 import { estimateTokens } from './estimate.js'
 import { findModel, MODELS, wireModel } from './models.js'
-import { chatStream, getChatHistory, normalizeCookie, startNewConversation } from './protocol.js'
+import { chatStream, normalizeCookie, openConversation } from './protocol.js'
 import { fetchAllQuotas, fetchQuota } from './quota.js'
 
 /** Role labels used when flattening the message history into one question. */
@@ -111,6 +118,9 @@ function isRedirectFailure(error) {
  * @property {string} cookie
  * @property {string} cookieEnv
  * @property {string} sessionId
+ * @property {string} style
+ * @property {boolean} sessionOnly
+ * @property {boolean} acceptDisclaimer
  * @property {number} contextWindow
  * @property {number} requestTimeoutMs
  * @property {number} maxQuestionChars
@@ -131,6 +141,8 @@ export class CityuPortalAdapter {
     this.sessionId = options.sessionId !== '' ? options.sessionId : randomUUID()
     /** Conversation id the portal has already been asked to claim, if any. */
     this.claimedSessionId = undefined
+    /** Wire model the claimed conversation belongs to; the portal binds a conversation to one model. */
+    this.claimedModel = undefined
   }
 
   /**
@@ -224,21 +236,26 @@ export class CityuPortalAdapter {
         )
       }
       const model = wireModel(options.model)
+      const { style, sessionOnly, acceptDisclaimer } = this.options
 
-      // The portal's own widget claims a conversation once, on load, and then
-      // asks questions against that id; only its "clear conversation" button
-      // calls `startnewconversation` again. Claiming on every turn trips the
-      // portal's one-active-session guard for no benefit, so claim only when
-      // the id changes (first turn of a process, or after a failed claim).
-      if (this.claimedSessionId !== this.sessionId) {
-        await startNewConversation({
+      // The portal's page opens a conversation with `getchathistory` and then
+      // asks questions against that id. Claiming on every turn would fight its
+      // one-active-session guard, so claim only when the id or the model
+      // changes (the first turn of a process, a model switch, or after the
+      // portal reported the session gone).
+      if (this.claimedSessionId !== this.sessionId || this.claimedModel !== model) {
+        await openConversation({
           baseURL: this.options.baseURL,
           cookie,
           id: this.sessionId,
           model,
+          style,
+          sessionOnly,
+          acceptDisclaimer,
           signal,
         })
         this.claimedSessionId = this.sessionId
+        this.claimedModel = model
       }
 
       const chunks = []
@@ -249,6 +266,8 @@ export class CityuPortalAdapter {
         id: this.sessionId,
         model,
         qst: question,
+        style,
+        sessionOnly,
         signal,
       })) {
         chunks.push(delta)
@@ -274,7 +293,15 @@ export class CityuPortalAdapter {
       }
       yield { type: 'finish', reason: { kind: 'stop' } }
     } catch (error) {
-      if (error instanceof CityuPortalError) throw error
+      if (error instanceof CityuPortalError) {
+        // The portal's one-active-session guard means the next attempt must
+        // open the conversation again, after the user closes the other tab.
+        if (error.code === 'INVALID_REQUEST' && /active chatbot session/iu.test(error.message)) {
+          this.claimedSessionId = undefined
+          this.claimedModel = undefined
+        }
+        throw error
+      }
       if (timedOut) {
         throw new CityuPortalError(
           `CityUHK portal did not answer within ${Math.round(this.options.requestTimeoutMs / 1000)}s`,
@@ -323,27 +350,6 @@ export class CityuPortalAdapter {
       + `(Plugins → Installed plugins → CityUHK portal chatbot), or set the ${this.options.cookieEnv} environment variable.`,
       'MISSING_CREDENTIAL',
     )
-  }
-
-  /**
-   * Read the portal's chat history as a read-only reachability probe.
-   *
-   * The quota endpoint lives in the portal's separate `chatbot` module, which
-   * sits behind a stricter edge filter; a cookie that works for chat can still
-   * be rejected there. This probe uses the same `kbchatbot` module as the chat
-   * calls, so the settings page can tell "the chatbot is reachable" apart from
-   * "quota is unreadable".
-   * @param {AbortSignal} [signal]
-   * @returns {Promise<Record<string, unknown>>}
-   */
-  async probeChat(signal) {
-    return getChatHistory({
-      baseURL: this.options.baseURL,
-      cookie: await this.resolveCookie(),
-      id: this.sessionId,
-      model: 'IT-Portal',
-      signal,
-    })
   }
 
   /**
