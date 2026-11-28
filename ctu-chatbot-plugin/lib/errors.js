@@ -9,7 +9,8 @@
  * this bundle independent of any specific harness package copy.
  *
  * Codes mirror `LLM_FAILURE_CODES` in `@deepseek-ai/dsh-llm`; only codes that
- * are meaningful for a session-cookie RAG endpoint are used.
+ * are meaningful for a session-cookie chatbot endpoint are used. A canned
+ * portal refusal is `CONTENT_REFUSED`, not `INVALID_REQUEST`.
  */
 
 /**
