@@ -30,6 +30,11 @@ const server = createServer((req, res) => {
       res.end('from the mock portal.')
       return
     }
+    if (url.endsWith('/kbchatbot/getchathistory')) {
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ status: 'success', chatMessages: [] }))
+      return
+    }
     if (url.endsWith('/chatbot/getusage')) {
       const { model } = JSON.parse(body || '{}')
       const key = model === 'LAST' ? 'DSV4' : model
@@ -125,10 +130,18 @@ function check(label, condition, detail) {
   check('quota read through stored cookie', reading.quota === 45000, reading.quota)
 }
 
-// 5. No cookie anywhere.
+// 5. Read-only chat probe on the kbchatbot module.
+{
+  const adapter = new CityuPortalAdapter(resolveOptions({ baseURL: `${base}/kbchatbot`, quotaBaseURL: quotaBase, cookie: 'a=b' }))
+  const history = await adapter.probeChat()
+  console.log('5. probeChat')
+  check('history read through the chat module', history.status === 'success', history)
+}
+
+// 6. No cookie anywhere.
 {
   const adapter = new CityuPortalAdapter(resolveOptions({ baseURL: `${base}/kbchatbot`, quotaBaseURL: quotaBase, cookieEnv: 'CTU_VERIFY_ABSENT' }))
-  console.log('5. missing credential')
+  console.log('6. missing credential')
   try {
     await adapter.readQuota('GPT')
     check('throws when unconfigured', false)

@@ -54,6 +54,16 @@ const server = createServer(async (req, res) => {
       res.end(JSON.stringify({ status: 'error', errorMsg: 'It seems you have another active Chatbot session. Please close all other sessions.' }))
       return
     }
+    if (body.model === 'DENIED') {
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ status: 'AccessDenied', errorMsg: '' }))
+      return
+    }
+    if (body.model === 'REFUSED') {
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ status: 'fail' }))
+      return
+    }
     if (body.model === 'HTMLSESSION') {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
       res.end('<!doctype html><html><body>Sign In</body></html>')
@@ -104,6 +114,12 @@ const server = createServer(async (req, res) => {
       await new Promise(r => setTimeout(r, 5))
     }
     res.end()
+    return
+  }
+
+  if (req.url === '/getchathistory') {
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({ status: 'success', chatMessages: [] }))
     return
   }
 
@@ -217,6 +233,26 @@ await check('claims the conversation before asking', async () => {
   assert.deepEqual(Object.keys(seen[1].body).sort(), ['id', 'model', 'qst'])
 })
 
+await check('claims the conversation once per id, not on every turn', async () => {
+  seen.length = 0
+  const adapter = makeAdapter()
+  await collect(adapter.stream({ provider: 'cityu-portal', model: 'cityu-gpt5', messages: history }))
+  await collect(adapter.stream({ provider: 'cityu-portal', model: 'cityu-gpt5', messages: history }))
+  assert.deepEqual(
+    seen.map(entry => entry.path),
+    ['/startnewconversation', '/getchatresponse', '/getchatresponse'],
+  )
+})
+
+await check('reads chat history as the settings-page probe', async () => {
+  seen.length = 0
+  const adapter = makeAdapter()
+  const result = await adapter.probeChat()
+  assert.equal(result.status, 'success')
+  assert.equal(seen[0].path, '/getchathistory')
+  assert.equal(seen[0].body.model, 'IT-Portal')
+})
+
 await check('unknown model ids are forwarded verbatim', async () => {
   seen.length = 0
   const adapter = makeAdapter()
@@ -287,6 +323,31 @@ await check('session conflict fails INVALID_REQUEST with guidance', async () => 
     (error) => {
       const f = failureOf(error)
       assert.match(f.message, /active chatbot session/iu)
+      return f.code === 'INVALID_REQUEST'
+    },
+  )
+})
+
+await check('AccessDenied status fails INVALID_CREDENTIAL', async () => {
+  const adapter = makeAdapter()
+  await assert.rejects(
+    () => collect(adapter.stream({ provider: 'cityu-portal', model: 'DENIED', messages: history })),
+    (error) => {
+      const f = failureOf(error)
+      assert.match(f.message, /denied access/iu)
+      return f.code === 'INVALID_CREDENTIAL'
+    },
+  )
+})
+
+await check('a reasonless refusal names the status and the remedy', async () => {
+  const adapter = makeAdapter()
+  await assert.rejects(
+    () => collect(adapter.stream({ provider: 'cityu-portal', model: 'REFUSED', messages: history })),
+    (error) => {
+      const f = failureOf(error)
+      assert.match(f.message, /status "fail"/u)
+      assert.match(f.message, /Close the portal chatbot/iu)
       return f.code === 'INVALID_REQUEST'
     },
   )
