@@ -1,6 +1,7 @@
 # ctu-chatbot-plugin
 
-DeepSeek Harness LLM provider for the CityUHK IT-portal chatbot.
+DeepSeek Harness LLM provider for the CityUHK GenAI chatbot (the model selector
+on `www.cityu.edu.hk/portal/category/5`).
 
 ## Install
 
@@ -32,4 +33,4 @@ See [`docs/DETAIL.md`](docs/DETAIL.md) for the protocol, model list, options,
 quota and usage readings, failure mapping, and limitations.
 
 After installing, pick the provider's models in **Settings → Models** (or set
-`agent-default-model` to `cityu-portal` / `cityu-it-portal`).
+`agent-default-model` to `cityu-portal` / `cityu-dsv4`).

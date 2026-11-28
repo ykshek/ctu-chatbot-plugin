@@ -1,6 +1,6 @@
 # CityUHK portal chatbot adapter
 
-Adds the City University of Hong Kong IT-portal chatbot (`www.cityu.edu.hk/portal`)
+Adds the City University of Hong Kong CityUHK Chatbot (`www.cityu.edu.hk/portal`)
 to DeepSeek Harness as the text-only LLM provider `cityu-portal`.
 
 **Configure it here.** This window belongs to the plugin's own page
@@ -10,20 +10,26 @@ and the table of every model's remaining quota.
 
 ## What it actually is
 
-The portal chatbot is **not** an OpenAI-compatible model endpoint. It is a
-knowledge-base RAG assistant that speaks its own protocol:
+The portal chatbot is **not** an OpenAI-compatible model endpoint. The GenAI
+chat page speaks the portal's own `chatbot`-module protocol:
 
 | | |
 | --- | --- |
-| Answer call | `POST {base}/getchatresponse` with `{ id, model, qst }` |
-| Session call | `POST {base}/startnewconversation` with `{ id, model }` |
+| Answer call | `POST {base}/getchatresponse` with `{ id, model, style, sessionOnly, qst }` |
+| Session call | `POST {base}/getchathistory` with `{ id, model, style, sessionOnly, qst: "newSession" }` |
+| Disclaimer | `POST {base}/agreeandproceed` (or `createnewuser` for a first-time account) |
 | Request body | one plain-text question (`qst`), **not** a `messages` array |
-| Response | raw markdown, streamed as `text/plain` (gzip), no usage counters |
+| Response | `<conversation-id>,,,` followed by markdown, streamed as `text/plain` (gzip), no usage counters |
 | Auth | the portal's browser session cookie, not an API key |
-| State | none on the server; a follow-up cannot see the previous turn |
+| State | the portal keeps the active conversation's transcript; the adapter still sends the harness history so tool-loop context is not lost |
 
-Because the server keeps no conversation state, this adapter flattens the
-harness history into the one `qst` string:
+The plugin used to point at the sibling `kbchatbot` module, which is the legacy
+IT knowledge-base widget. That module ignores the GenAI model names and answers
+out-of-scope questions with the IT Service Desk fallback (the Chinese
+"很抱歉，我無法提供你問題的答案…" text). The GenAI page — and this adapter — use
+`/portal/api/module/chatbot`.
+
+The adapter flattens the harness history into the one `qst` string:
 
 ```
 User: How do I reset my CityU portal password?
@@ -34,13 +40,19 @@ User: What if that fails?
 ```
 
 The portal tracks **one active conversation per signed-in user**. The adapter
-claims its conversation with `startnewconversation` once, on the first turn,
-then asks every later turn against that same id — the same lifecycle as the
-portal's own widget, which only calls that endpoint from its "clear
-conversation" button. If the portal already holds a session from another
-browser tab, it refuses the claim; the plugin reports that as `INVALID_REQUEST`
-with a message telling you to close the other tab, and does not fight the
-portal for the session.
+opens its conversation with `getchathistory` and `qst: "newSession"` once, on
+the first turn, then asks every later turn against that same id — the same
+lifecycle as the portal page. If the portal already holds a session from another
+browser tab, the answer stream carries its "another active Chatbot session"
+text; the plugin reports that as `INVALID_REQUEST` with a message telling you to
+close the other tab, and does not fight the portal for the session.
+
+A first-time account (or one that has not accepted the current terms) gets
+`status: "showdisclaimer"` (or `"newUser"`) instead of a working conversation.
+The plugin reports that as `INVALID_REQUEST` and asks you to accept the
+disclaimer once at `https://www.cityu.edu.hk/portal/category/5`. Set
+`acceptDisclaimer: true` only if you want the plugin to post the acknowledgement
+for you.
 
 ## Models
 
@@ -48,7 +60,7 @@ The portal's model selector values are exposed as harness model ids:
 
 | Harness model id | Portal `model` | Backend |
 | --- | --- | --- |
-| `cityu-it-portal` | `IT-Portal` | portal default route |
+| `cityu-it-portal` | `IT-Portal` | legacy IT knowledge-base route (not in the GenAI selector; kept for compatibility) |
 | `cityu-gpt5-mini` | `GPTmini` | GPT-5 mini |
 | `cityu-gpt5` | `GPT` | GPT-5.2 |
 | `cityu-dsv4` | `DSV4` | DeepSeek V4 Flash |
@@ -65,11 +77,14 @@ The plugin reads its config from the bundle patch and/or the profile's
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `baseURL` | `https://www.cityu.edu.hk/portal/api/module/kbchatbot` | portal chatbot API root |
-| `quotaBaseURL` | `https://www.cityu.edu.hk/portal/api/module/chatbot` | quota API root (a different module from `baseURL`) |
+| `baseURL` | `https://www.cityu.edu.hk/portal/api/module/chatbot` | GenAI chatbot API root (chat and quota) |
+| `quotaBaseURL` | *(same as `baseURL`)* | quota API root, when a portal puts it elsewhere |
 | `cookieEnv` | `CITYU_PORTAL_COOKIE` | credential reference and environment fallback for the session cookie |
 | `cookie` | *(empty)* | literal cookie value; takes priority over the stored credential |
 | `sessionId` | *(random UUID)* | fixed conversation id across restarts |
+| `style` | `"1"` | portal thinking effort: `"0"` quick, `"1"` balanced, `"2"` deep (names `quick`/`balanced`/`deep` also work) |
+| `sessionOnly` | `false` | portal's "show current session only" flag for the conversation |
+| `acceptDisclaimer` | `false` | post the GenAI disclaimer acknowledgement automatically instead of asking the operator to accept it |
 | `contextWindow` | `32000` | declared context so harness compaction runs early |
 | `requestTimeoutMs` | `120000` | full-request deadline |
 | `maxQuestionChars` | `24000` | cap on the flattened transcript |
@@ -87,9 +102,9 @@ portal requests.
 1. Sign in at `https://www.cityu.edu.hk/portal/category/5`.
 2. Open the browser's developer tools.
 3. Choose the **Network** tab and reload the page so the portal requests appear.
-4. Select a finished request to `www.cityu.edu.hk` — the page itself or one of
-   its `api/module/...` calls. If an entry says *Provisional headers are shown*,
-   reload and pick another one.
+4. Select the `api/module/chatbot/getchatresponse` request (or another finished
+   request to `www.cityu.edu.hk`). If an entry says *Provisional headers are
+   shown*, reload and pick another one.
 5. In the request's request headers, find **Cookie** and copy its whole value.
    Do not copy a `Set-Cookie` response header.
 
@@ -156,12 +171,10 @@ the same request the portal's own dashboard widget makes.
   selection belongs to this provider, so it never claims a quota for a model it
   does not serve.
 
-The settings page verifies a pasted cookie by reading `getusage`. That module
-sits behind a stricter edge filter than the `kbchatbot` module the chat uses, so
-a cookie that works for chat can still be rejected there. When that happens the
-page keeps the cookie and reports the quota problem as a warning, after a
-read-only `getchathistory` probe on the chat module confirms the chatbot is
-reachable.
+The settings page verifies a pasted cookie by reading `getusage`. Chat and
+quota share the `chatbot` module, so the same cookie and the same edge filter
+cover both: a successful `getusage` is also proof that the chatbot is
+reachable, and no conversation has to be opened to test a cookie.
 
 The portal reports no prompt or completion token counts. To make the harness
 readings work anyway, the adapter emits a `usage` chunk before its terminal
@@ -173,17 +186,21 @@ pill and the decode-speed figure show.
 
 - **Text only.** Images and files are projected to placeholder text by the
   harness before they reach the adapter; the portal cannot read them.
-- **No tool calling.** The portal never returns tool calls. Harness tool
-  declarations are accepted but have no effect, so a turn always ends with a
-  text answer (`finish: stop`).
+- **No tool calling.** The portal does not execute tools. When the harness
+  system prompt asks the model to use them, the portal may echo DSH's DSML
+  tool-call syntax as text; the adapter maps that to one text block, so no tool
+  is executed and the turn ends with `finish: stop`.
 - **No reported usage.** The portal counts nothing, so the adapter emits an
   estimated `usage` chunk (see above) and the harness readings are estimates.
 - **No reasoning channel.** The portal streams only visible markdown.
 - **One conversation per account.** Using the portal chatbot in a browser tab
   and through this provider at the same time makes the two claim the same
-  session; whichever asked last wins.
-- **Answers are knowledge-base content.** They describe CityUHK IT services and
-  may be stale; the portal itself carries a disclaimer to that effect.
+  session; the second caller is told another session is active and has to wait
+  or close it.
+- **Answers are the selected model's content.** They may be stale or wrong;
+  the portal itself carries a disclaimer to that effect. The portal may also
+  refuse a question with its canned IT Service Desk fallback, which the adapter
+  reports as `CONTENT_REFUSED` rather than passing off as an answer.
 
 ## Failure mapping
 
@@ -195,8 +212,11 @@ pill and the decode-speed figure show.
 | HTTP 429 | `RATE_LIMIT` |
 | HTTP 5xx | `SERVER` |
 | session conflict / other 4xx | `INVALID_REQUEST` |
-| portal refused a conversation (HTTP 200 JSON) | `INVALID_REQUEST` |
+| another active conversation (`"It seems you have another active Chatbot session…"`) | `INVALID_REQUEST` |
+| GenAI disclaimer not accepted (`showdisclaimer` / `newUser`) | `INVALID_REQUEST` |
+| portal's canned IT Service Desk fallback | `CONTENT_REFUSED` |
 | empty answer | `EMPTY_RESPONSE` |
+| answer missing the `<id>,,,` frame | `MALFORMED_RESPONSE` |
 | deadline exceeded | `TIMEOUT` |
 | caller aborted | `ABORTED` |
 | network / decode failure | `TRANSPORT` |
@@ -207,10 +227,11 @@ pill and the decode-speed figure show.
   `CtuQuotaService` that publishes the quota Remote methods.
 - `client.js` — Web client half: the bundle page's configuration section and
   the composer dock quota pill.
-- `lib/adapter.js` — the duck-typed adapter: question flattening, session claim,
-  stream translation, usage estimate, quota reads.
-- `lib/protocol.js` — HTTP transport, attribution header, cookie normalization,
-  HTTP failure classification.
+- `lib/adapter.js` — the duck-typed adapter: question flattening, session
+  handshake, stream translation, usage estimate, quota reads.
+- `lib/protocol.js` — HTTP transport, the `chatbot`-module session/answer
+  calls, `<id>,,,` frame parsing, refusal screening, attribution header,
+  cookie normalization, HTTP failure classification.
 - `lib/quota.js` — per-model quota normalization and the all-model read.
 - `lib/estimate.js` — the ~4 characters per token estimator behind the usage
   chunk.
