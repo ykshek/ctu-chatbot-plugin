@@ -112,10 +112,7 @@ export async function startNewConversation({ baseURL, cookie, id, model, signal 
     )
   }
   if (parsed === null || typeof parsed !== 'object' || parsed.status !== 'success') {
-    const detail = typeof parsed?.errorMsg === 'string' && parsed.errorMsg !== ''
-      ? parsed.errorMsg
-      : 'the portal refused to start a conversation'
-    throw sessionFailure(detail)
+    throw sessionFailure(parsed, text)
   }
 }
 
@@ -300,21 +297,52 @@ function httpFailure(status, body) {
 }
 
 /**
+ * The portal reports an expired or unauthorized session as a 200 JSON status
+ * rather than an HTTP 401. Name it so the harness offers the credential fix
+ * instead of the generic refusal text.
+ * @param {unknown} parsed
+ * @returns {CityuPortalError | undefined}
+ */
+function accessDeniedFailure(parsed) {
+  const status = typeof parsed?.status === 'string' ? parsed.status : ''
+  if (!/^accessdenied$/iu.test(status)) return undefined
+  return new CityuPortalError(
+    'CityUHK portal denied access to the chatbot. Sign in to the portal again and copy a fresh Cookie header value.',
+    'INVALID_CREDENTIAL',
+  )
+}
+
+/**
  * Explain why the portal would not start a conversation, calling out the
  * one-active-session rule that is the usual cause.
- * @param {string} detail
+ * @param {unknown} parsed
+ * @param {string} body
  * @returns {CityuPortalError}
  */
-function sessionFailure(detail) {
-  if (/another active|close all other|active chatbot session/iu.test(detail)) {
+function sessionFailure(parsed, body) {
+  const denied = accessDeniedFailure(parsed)
+  if (denied !== undefined) return denied
+
+  const status = typeof parsed?.status === 'string' && parsed.status !== '' ? parsed.status : undefined
+  const detail = typeof parsed?.errorMsg === 'string' ? parsed.errorMsg.trim() : ''
+
+  if (detail !== '' && /another active|close all other|active chatbot session/iu.test(detail)) {
     return new CityuPortalError(
       'CityUHK portal already has an active chatbot session for this account. '
       + 'Close the portal chatbot in your browser (or sign out of other devices) and retry.',
       'INVALID_REQUEST',
     )
   }
+
+  const reason = detail !== ''
+    ? detail
+    : status !== undefined
+      ? `the portal returned status "${status}"`
+      : `the portal returned an unrecognized response (${body.trim().slice(0, 200)})`
   return new CityuPortalError(
-    `CityUHK portal could not start a conversation: ${detail}`,
+    `CityUHK portal could not start a conversation: ${reason}. `
+    + 'Close the portal chatbot in any other browser tab and retry; if it still fails, '
+    + 'sign in to the portal again and paste a fresh Cookie header value.',
     'INVALID_REQUEST',
   )
 }
