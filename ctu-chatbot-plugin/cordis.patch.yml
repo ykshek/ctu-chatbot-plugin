@@ -1,10 +1,39 @@
 # Activates the portal chatbot as the `ctu-portal` LLM provider.
 # The portal authenticates with a browser session cookie, which this plugin
 # reads from the environment variable named by `cookieEnv` at request time.
+#
+# The portal rejects prompts above roughly 12k characters, so the declared
+# context is small and compaction-basic gets a matching small-token policy for
+# these models. Without the per-model policy, compaction-basic's 64k-token
+# default headroom would not fit the portal's window and compaction would fail.
 - insert:
     - id: ctu-chatbot-plugin
       name: 'ctu-chatbot-plugin'
       config:
         cookieEnv: CTU_PORTAL_COOKIE
-        contextWindow: 32000
+        contextWindow: 4000
         requestTimeoutMs: 120000
+- id: compaction-basic
+  name: '@deepseek-ai/dsh-compaction-basic'
+  config:
+    modelPolicies:
+      - provider: ctu-portal
+        model: ctu-gpt5-mini
+        headroomTokens: 1000
+        maxTokens: 1000
+        thresholdRatio: 0.6
+      - provider: ctu-portal
+        model: ctu-gpt5
+        headroomTokens: 1000
+        maxTokens: 1000
+        thresholdRatio: 0.6
+      - provider: ctu-portal
+        model: ctu-dsv4
+        headroomTokens: 1000
+        maxTokens: 1000
+        thresholdRatio: 0.6
+      - provider: ctu-portal
+        model: ctu-qwen38
+        headroomTokens: 1000
+        maxTokens: 1000
+        thresholdRatio: 0.6

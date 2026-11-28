@@ -41,12 +41,15 @@ User: What if that fails?
 ```
 
 The portal tracks **one active conversation per signed-in user**. The adapter
-opens its conversation with `getchathistory` and `qst: "newSession"` once, on
-the first turn, then asks every later turn against that same id — the same
-lifecycle as the portal page. If the portal already holds a session from another
-browser tab, the answer stream carries its "another active Chatbot session"
-text; the plugin reports that as `INVALID_REQUEST` with a message telling you to
-close the other tab, and does not fight the portal for the session.
+keeps one portal conversation per DSH session (keyed by `GenerateOptions.sessionId`),
+opens it with `getchathistory` and `qst: "newSession"` on that session's first
+turn, and serializes portal requests so subagents or parallel sessions cannot
+interleave on the account. Switching between DSH sessions reopens the target
+conversation; the portal's account-level history may still be visible to the
+model. If the portal already holds a session from another browser tab, the
+answer stream carries its "another active Chatbot session" text; the plugin
+reports that as `INVALID_REQUEST` with a message telling you to close the other
+tab, and does not fight the portal for the session.
 
 The portal reports `status: "showdisclaimer"` on `getchathistory` for **every
 new conversation**, even for an account that already accepted the disclaimer on
@@ -65,13 +68,46 @@ the adapter reads the new value; a headless profile sets the option in
 configuration instead. `newUser` is handled the same way with `createnewuser`,
 after which the history is read once more.
 
+## Agent runtime
+
+A normal agent turn carries, in order: the harness system prompt (when
+`includeSystemPrompt` is on), the tool catalog and DSML syntax, and the flattened
+transcript. The adapter streams text as it arrives and holds back only a suffix
+that could become the tool marker; once the marker is seen, the tool block is
+parsed and emitted as harness `tool-call` blocks with `finish: tool-calls`.
+
+Two auxiliary requests are handled **locally** so they never touch the agent's
+only portal conversation:
+
+- `purpose: "session-title"` — a title is derived from the first user message.
+  The portal would otherwise answer the task instead of titling it, consume
+  quota, and add noise to the conversation.
+- `purpose: "compaction"` — a deterministic summary of the latest transcript is
+  returned (the portal has no room for a second long summarization request).
+  This keeps DSH's compaction from sending a second oversized prompt through
+  the portal or corrupting the agent's memory.
+
+The declared `contextWindow` is deliberately small (4,000 tokens) because the
+portal rejects a prompt above roughly 12k characters; this makes DSH compact
+before the portal's hard limit instead of after it. The bundle patch also adds a
+per-model `compaction-basic` policy (`headroomTokens`/`maxTokens` 1,000,
+`thresholdRatio` 0.6) for the `ctu-portal` models: compaction-basic's default
+64k-token headroom cannot fit a small window and would otherwise fail. A prompt
+the portal still rejects yields `CONTEXT_WINDOW_EXCEEDED`; the adapter first
+retries once with a 60% transcript budget, then reports the failure.
+
+If a profile patch sets `contextWindow` explicitly, it overrides the bundle
+default; keep that value in step with the 12k-character prompt cap (4,000 tokens
+is the tested value).
+
 ## Tool use
 
 The portal has no native tool field, so the adapter carries the harness tool
 declarations in the one `qst` string:
 
-- a compact catalog lists every active tool as `name(required*:type, ...)` plus
-  a one-line description;
+- a compact catalog lists every active tool as `name(required*:type, enum…)`;
+  descriptions are included only when the harness system prompt is not sent
+  (when it is sent, the catalog keeps just signatures to save budget);
 - the same header shows the DSML call syntax the model should emit;
 - when the answer contains a `<｜DSML｜tool_calls>` block, the adapter splits the
   fixed text from the calls, emits one `tool-call` block per `<invoke>`, and
@@ -92,14 +128,14 @@ portal still rejects a prompt, the harness sees `CONTEXT_WINDOW_EXCEEDED`; lower
 those two options and retry. A first `find` over a repository can otherwise
 return tens of kilobytes and overflow the portal's limit.
 
-Because the answer has to be buffered to detect the block, text arrives at the
-end of the portal stream instead of token by token.
+Text before a tool block is streamed as it arrives; the tool block itself is
+parsed when the portal finishes, so the tool cards appear at the end of the
+answer.
 
-`includeSystemPrompt` is still `false` by default: the tool catalog carries the
-call syntax, while the harness system prompt is mostly behavioural guidance.
-Enable it for agent work if you want the full harness prompt (working
-directory, file policy, tool conventions) in every request; it costs quota on
-each turn.
+`includeSystemPrompt` is **on** by default. It sends the harness system prompt
+(working directory, file policy, tool conventions) and makes the adapter omit
+catalog descriptions to keep the prompt within the portal limit. Turn it off
+for a simpler chat-only prompt.
 
 ## Models
 
@@ -114,7 +150,9 @@ The portal's model selector values are exposed as harness model ids:
 
 Any other model id is forwarded to the portal verbatim, so a newly added
 backend can be tried without updating this bundle. All models declare
-`text` as their only input modality.
+`text` as their only input modality. Every model is prompted with the same
+DSML tool syntax; GPT-5.2 and Qwen3.8 were verified on a live single-tool call,
+but DeepSeek V4 Flash is the tested default for long agent loops.
 
 ## Configuration
 
@@ -131,12 +169,12 @@ The plugin reads its config from the bundle patch and/or the profile's
 | `style` | `"1"` | portal thinking effort: `"0"` quick, `"1"` balanced, `"2"` deep (names `quick`/`balanced`/`deep` also work) |
 | `sessionOnly` | `false` | portal's "show current session only" flag for the conversation |
 | `acceptDisclaimer` | `false` | post the GenAI disclaimer acknowledgement automatically instead of asking the operator to accept it; the plugin page's switch writes this option |
-| `contextWindow` | `32000` | declared context so harness compaction runs early |
+| `contextWindow` | `4000` | declared context so harness compaction runs before the portal's prompt limit |
 | `requestTimeoutMs` | `120000` | full-request deadline |
 | `maxQuestionChars` | `12000` | cap on the flattened transcript; the portal rejects an oversized prompt outright |
 | `maxToolResultChars` | `2000` | cap on one tool result in the transcript; the middle is elided with a note |
 | `quotaCacheMs` | `30000` | how long one quota reading stays fresh |
-| `includeSystemPrompt` | `false` | forward the harness system prompt into `qst` |
+| `includeSystemPrompt` | `true` | forward the harness system prompt into `qst`; catalog descriptions are omitted when it is on |
 
 ### Supplying the session cookie
 
@@ -236,15 +274,17 @@ pill and the decode-speed figure show.
 - **Tool calls are emulated through text.** The portal does not execute tools;
   the adapter parses the model's DSML markup and hands the calls to the harness.
   A malformed or fenced block falls back to a text answer, and the model must
-  follow the catalog's calling convention. The adapter buffers the answer to
-  parse it, so text is not streamed live.
+  follow the catalog's calling convention. Text before the tool marker is
+  streamed live; only the tool block waits for the portal's stream to finish.
 - **No reported usage.** The portal counts nothing, so the adapter emits an
   estimated `usage` chunk (see above) and the harness readings are estimates.
 - **No reasoning channel.** The portal streams only visible markdown.
-- **One conversation per account.** Using the portal chatbot in a browser tab
-  and through this provider at the same time makes the two claim the same
-  session; the second caller is told another session is active and has to wait
-  or close it.
+- **One conversation per account.** The adapter keeps a portal conversation per
+  DSH session and serializes them, but the portal still allows only one active
+  conversation per signed-in account. Subagents or parallel DSH sessions run
+  one after another, and a browser chatbot tab competes for the same session;
+  the second caller is told another session is active and has to wait or close
+  it.
 - **Answers are the selected model's content.** They may be stale or wrong;
   the portal itself carries a disclaimer to that effect. The portal may also
   refuse a question with its canned IT Service Desk fallback, which the adapter
@@ -267,6 +307,8 @@ pill and the decode-speed figure show.
 | answer missing the `<id>,,,` frame | `MALFORMED_RESPONSE` |
 | deadline exceeded | `TIMEOUT` |
 | caller aborted | `ABORTED` |
+| portal quota-exhausted text | `ACCOUNT_QUOTA` |
+| portal rate-limit text | `RATE_LIMIT` |
 | portal says the message is too long | `CONTEXT_WINDOW_EXCEEDED` |
 | malformed tool-call markup | passed through as text; no failure |
 | network / decode failure | `TRANSPORT` |

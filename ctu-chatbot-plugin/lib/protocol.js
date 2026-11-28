@@ -50,6 +50,10 @@ const ACCESS_DENIED_TEXT = /^\s*Access\s*denied\b/iu
 /** The portal's plain-text length guard; it answers without the `,,,` frame. */
 const MESSAGE_TOO_LONG = /(?:your|the)\s+message\s+is\s+too\s+long|reduce\s+the\s+length\s+of\s+your\s+message/iu
 
+/** Plain-text account-quota or rate-limit warnings. */
+const QUOTA_EXHAUSTED = /(?:quota|allowance|usage).{0,60}(?:exceed|reached|insufficient|not\s+enough|ran\s+out|used\s+up)|(?:exceed|reached|insufficient).{0,30}(?:quota|allowance)|額度|配額|用量已|超出/u
+const RATE_LIMITED = /too\s+many\s+requests|rate\s+limit|slow\s+down/iu
+
 /**
  * The harness version, read from the installation manifest when the process
  * exposes its install directory. Kept local so the bundle imports no DSH
@@ -640,6 +644,12 @@ function unframedFailure(text) {
       + 'Lower maxQuestionChars or maxToolResultChars and retry.',
       'CONTEXT_WINDOW_EXCEEDED',
     )
+  }
+  if (body.length < 500 && QUOTA_EXHAUSTED.test(body)) {
+    return new CtuPortalError(`The portal's quota is exhausted: ${body.slice(0, 240)}`, 'ACCOUNT_QUOTA')
+  }
+  if (body.length < 500 && RATE_LIMITED.test(body)) {
+    return new CtuPortalError(`The portal is rate limiting requests: ${body.slice(0, 240)}`, 'RATE_LIMIT')
   }
   if (ACCESS_DENIED_TEXT.test(body) && body.length < 200) return accessDeniedTextFailure()
   return new CtuPortalError(

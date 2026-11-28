@@ -25,7 +25,7 @@ import { CtuPortalError } from './errors.js'
 import { estimateTokens } from './estimate.js'
 import { findModel, MODELS, wireModel } from './models.js'
 import { chatStream, normalizeCookie, openConversation } from './protocol.js'
-import { coerceArguments, extractToolCalls, formatToolCatalog } from './dsml.js'
+import { coerceArguments, extractToolCalls, findToolMarker, formatToolCatalog, longestMarkerSuffix } from './dsml.js'
 import { fetchAllQuotas, fetchQuota } from './quota.js'
 
 /** Role labels used when flattening the message history into one question. */
@@ -80,15 +80,19 @@ function contentText(content) {
  * the output and its final status line.
  * @param {string} text
  * @param {number | undefined} max
+ * @param {string} [hint] - recovery guidance appended to the elision note.
  * @returns {string}
  */
-function truncateToolText(text, max) {
+function truncateToolText(text, max, hint) {
   if (typeof max !== 'number' || !Number.isInteger(max) || max <= 0 || text.length <= max) return text
   const tail = Math.min(600, Math.max(0, Math.floor(max / 4)))
   const head = Math.max(0, max - tail)
   const omitted = text.length - head - tail
   if (omitted <= 0) return text
-  return `${text.slice(0, head)}\n…[truncated ${omitted} characters]…\n${text.slice(text.length - tail)}`
+  const note = hint === undefined || hint === ''
+    ? `…[truncated ${omitted} characters]…`
+    : `…[truncated ${omitted} characters; ${hint}]…`
+  return `${text.slice(0, head)}\n${note}\n${text.slice(text.length - tail)}`
 }
 
 /**
@@ -150,7 +154,11 @@ function renderMessage(message, toolNames, settings) {
   if (message.role === 'tool') {
     const id = typeof message.toolCallId === 'string' ? message.toolCallId : ''
     const name = (id !== '' ? toolNames.get(id) : undefined) ?? 'tool'
-    const text = truncateToolText(contentText(message.content).trim(), settings.maxToolResultChars)
+    const text = truncateToolText(
+      contentText(message.content).trim(),
+      settings.maxToolResultChars,
+      'use a narrower command or read the file with offset/limit',
+    )
     const error = message.isError === true ? ' [error]' : ''
     return `Tool result (${name}${id === '' ? '' : `, ${id}`})${error}:\n${text === '' ? '[no output]' : text}`
   }
@@ -178,16 +186,23 @@ function renderMessage(message, toolNames, settings) {
  */
 export function buildQuestion(options, settings) {
   const header = []
-  if (settings.includeSystemPrompt && typeof options.system === 'string' && options.system.trim() !== '') {
-    header.push(`System: ${options.system.trim()}`)
+  if (settings.includeSystemPrompt) {
+    if (typeof options.system === 'string' && options.system.trim() !== '') {
+      header.push(`System: ${options.system.trim()}`)
+    }
+    for (const message of options.messages ?? []) {
+      if (message?.role !== 'system' && message?.role !== 'developer') continue
+      const text = contentText(message.content).trim()
+      if (text !== '') header.push(`${ROLE_LABELS[message.role]}: ${text}`)
+    }
   }
-  const catalog = formatToolCatalog(options.tools)
+  const catalog = formatToolCatalog(options.tools, { descriptions: !settings.includeSystemPrompt })
   if (catalog !== '') header.push(catalog)
 
   const turns = []
   const toolNames = new Map()
   for (const message of options.messages ?? []) {
-    if (!settings.includeSystemPrompt && (message.role === 'system' || message.role === 'developer')) continue
+    if (message?.role === 'system' || message?.role === 'developer') continue
     const rendered = renderMessage(message, toolNames, settings)
     if (rendered !== '') turns.push(rendered)
   }
@@ -210,6 +225,56 @@ export function buildQuestion(options, settings) {
   const tailKeep = available - headKeep
   const kept = `${bodyText.slice(0, headKeep)}\n${marker}\n${bodyText.slice(bodyText.length - tailKeep)}`
   return [headerText, kept].filter(Boolean).join('\n\n')
+}
+
+/**
+ * Resolve one DSH session's key. `sessionId` is process-local; the fallback
+ * covers one-shot and auxiliary requests.
+ * @param {{ sessionId?: unknown }} options
+ * @returns {string}
+ */
+function sessionKey(options) {
+  return typeof options?.sessionId === 'string' && options.sessionId !== '' ? options.sessionId : 'default'
+}
+
+/**
+ * Synthesize a session title locally. A `session-title` request is an
+ * auxiliary call: routing it through the portal would consume quota, pollute
+ * the agent's only conversation, and (because the title instruction is a
+ * system prompt) produce a task answer rather than a title.
+ * @param {{ messages?: readonly any[] }} options
+ * @returns {string}
+ */
+function titleFrom(options) {
+  for (const message of options.messages ?? []) {
+    if (message?.role !== 'user') continue
+    const text = contentText(message.content).trim()
+    if (text === '') continue
+    const line = text.split('\n').map(part => part.trim()).find(part => part !== '') ?? ''
+    const clean = line.replace(/[#*`>_]/gu, '').replace(/\s+/gu, ' ').trim()
+    if (clean === '') continue
+    return clean.length <= 60 ? clean : `${clean.slice(0, 57).trimEnd()}…`
+  }
+  return 'New session'
+}
+
+/**
+ * Build a deterministic compaction summary locally. The portal has one active
+ * conversation and a small prompt limit, so sending the compaction request
+ * through it would both pollute the agent and likely exceed the limit.
+ * @param {{ messages?: readonly any[] }} options
+ * @param {{ maxQuestionChars: number, maxToolResultChars: number }} settings
+ * @returns {string}
+ */
+function compactionFrom(options, settings) {
+  const transcript = buildQuestion({ messages: options.messages ?? [], tools: [] }, {
+    includeSystemPrompt: false,
+    maxQuestionChars: Math.min(4_000, settings.maxQuestionChars),
+    maxToolResultChars: settings.maxToolResultChars,
+  })
+  return transcript === ''
+    ? 'No prior conversation to compact.'
+    : `Compacted conversation (latest state):\n\n${transcript}`
 }
 
 /**
@@ -250,12 +315,67 @@ export class CtuPortalAdapter {
     this.options = options
     /** Reads the cookie the settings page stored; absent in a headless install. */
     this.credentialReader = auth.credentialReader
-    /** Stable conversation id for this adapter generation. */
+    /** Conversation id used by the default conversation. */
     this.sessionId = options.sessionId !== '' ? options.sessionId : randomUUID()
-    /** Conversation id the portal has already been asked to claim, if any. */
-    this.claimedSessionId = undefined
-    /** Wire model the claimed conversation belongs to; the portal binds a conversation to one model. */
-    this.claimedModel = undefined
+    /**
+     * Per-DSH-session portal conversations. The portal allows one active
+     * conversation per account, so these are opened serially and the active id
+     * is tracked separately.
+     * @type {Map<string, { id: string, claimed: boolean, model: string | undefined }>}
+     */
+    this.sessions = new Map()
+    /** Portal conversation currently open on the account, if any. */
+    this.activePortalId = undefined
+    /** Serializes portal requests; the portal itself allows one active conversation. */
+    this.portalLock = Promise.resolve()
+  }
+
+  /**
+   * Compatibility view of the default conversation's claim state.
+   * @returns {string | undefined}
+   */
+  get claimedSessionId() {
+    const state = this.sessions.get('default')
+    return state?.claimed === true ? state.id : undefined
+  }
+
+  /**
+   * Compatibility view of the default conversation's claimed model.
+   * @returns {string | undefined}
+   */
+  get claimedModel() {
+    return this.sessions.get('default')?.model
+  }
+
+  /**
+   * Resolve one DSH session's portal conversation state.
+   * @param {string} key
+   * @returns {{ id: string, claimed: boolean, model: string | undefined }}
+   */
+  sessionState(key) {
+    let state = this.sessions.get(key)
+    if (state === undefined) {
+      state = {
+        id: key === 'default' ? this.sessionId : randomUUID(),
+        claimed: false,
+        model: undefined,
+      }
+      this.sessions.set(key, state)
+    }
+    return state
+  }
+
+  /**
+   * Serialize portal access. Tool execution happens between model calls, so the
+   * lock only spans the portal request and its answer, not the whole turn.
+   * @returns {Promise<() => void>}
+   */
+  async acquirePortal() {
+    const previous = this.portalLock
+    let release
+    this.portalLock = new Promise(resolve => { release = resolve })
+    await previous
+    return release
   }
 
   /**
@@ -267,11 +387,20 @@ export class CtuPortalAdapter {
   }
 
   /**
-   * No provider-specific retry policy: the harness defaults apply.
-   * @returns {undefined}
+   * Retry the transient portal failures the adapter classifies. The portal is
+   * a browser-session API, so a short bounded backoff is safer than a long
+   * retry storm.
+   * @returns {{ mode: 'normal', initialDelayMs: number, maxDelayMs: number, jitterRatio: number, maxRetries: number, retryableCodes: readonly string[] }}
    */
   providerRetryPolicy() {
-    return undefined
+    return Object.freeze({
+      mode: 'normal',
+      initialDelayMs: 500,
+      maxDelayMs: 8_000,
+      jitterRatio: 0.1,
+      maxRetries: 2,
+      retryableCodes: ['RATE_LIMIT', 'SERVER', 'TRANSPORT', 'TIMEOUT', 'EMPTY_RESPONSE', 'MALFORMED_RESPONSE'],
+    })
   }
 
   /**
@@ -340,117 +469,51 @@ export class CtuPortalAdapter {
 
     try {
       signal.throwIfAborted()
-      const cookie = await this.resolveCookie()
-      const question = buildQuestion(options, this.options)
-      if (question === '') {
-        throw new CtuPortalError(
-          'The portal adapter received no text to ask',
-          'INVALID_REQUEST',
-        )
+
+      // Auxiliary calls must not touch the agent's only portal conversation.
+      // Titles are synthesized locally; compaction produces a deterministic
+      // summary rather than sending a second model request through the portal.
+      const purpose = typeof options.purpose === 'string' ? options.purpose : ''
+      if (purpose === 'session-title') {
+        yield* this.localAnswer(titleFrom(options))
+        return
       }
+      if (purpose === 'compaction') {
+        yield* this.localAnswer(compactionFrom(options, this.options))
+        return
+      }
+
+      const cookie = await this.resolveCookie()
       const model = wireModel(options.model)
+      const state = this.sessionState(sessionKey(options))
       const { style, sessionOnly, acceptDisclaimer } = this.options
 
-      // The portal's page opens a conversation with `getchathistory` and then
-      // asks questions against that id. Claiming on every turn would fight its
-      // one-active-session guard, so claim only when the id or the model
-      // changes (the first turn of a process, a model switch, or after the
-      // portal reported the session gone).
-      if (this.claimedSessionId !== this.sessionId || this.claimedModel !== model) {
-        await openConversation({
-          baseURL: this.options.baseURL,
+      const release = await this.acquirePortal()
+      try {
+        yield* this.portalAnswer({
+          options,
+          signal,
           cookie,
-          id: this.sessionId,
           model,
+          state,
           style,
           sessionOnly,
           acceptDisclaimer,
-          signal,
         })
-        this.claimedSessionId = this.sessionId
-        this.claimedModel = model
-      }
-
-      const answerParts = []
-      for await (const delta of chatStream({
-        baseURL: this.options.baseURL,
-        cookie,
-        id: this.sessionId,
-        model,
-        qst: question,
-        style,
-        sessionOnly,
-        signal,
-      })) {
-        answerParts.push(delta)
-      }
-      const answer = answerParts.join('')
-      if (answer.trim() === '') {
-        throw new CtuPortalError(
-          'The portal returned an empty answer',
-          'EMPTY_RESPONSE',
-        )
-      }
-
-      // The portal has no native tool channel: a DeepSeek-backed answer may
-      // contain DSML markup. Buffer the answer, strip the markup, and emit a
-      // text block plus one tool-call block per invoke. A `tool-calls` finish
-      // makes the harness execute them and call this provider again with the
-      // results.
-      const parsed = extractToolCalls(answer)
-      const toolByName = new Map()
-      for (const tool of options.tools ?? []) {
-        if (tool !== null && typeof tool === 'object' && typeof tool.name === 'string') {
-          toolByName.set(tool.name, tool)
-        }
-      }
-
-      let index = 0
-      // A plain answer is passed through exactly; only the DSML preamble is
-      // trimmed by the parser. Check emptiness separately so trailing
-      // whitespace survives.
-      const text = parsed.text
-      if (text.trim() !== '') {
-        yield { type: 'block-start', index, blockType: 'text' }
-        yield { type: 'text-delta', index, text }
-        yield { type: 'block-end', index, block: { type: 'text', text } }
-        index += 1
-      }
-      for (const call of parsed.calls) {
-        coerceArguments(call.arguments, toolByName.get(call.name))
-        const id = `call-${randomUUID()}`
-        const args = JSON.stringify(call.arguments)
-        yield { type: 'block-start', index, blockType: 'tool-call' }
-        yield { type: 'tool-call-delta', index, id, name: call.name, argumentsDelta: args }
-        yield {
-          type: 'block-end',
-          index,
-          block: { type: 'tool-call', id, name: call.name, arguments: args },
-        }
-        index += 1
-      }
-
-      // The portal reports no prompt or completion counts, so the harness would
-      // leave the Usage pill empty and the decode-speed figure blank. Emitting
-      // an estimate before the terminal chunk fills both; it is labelled as an
-      // estimate everywhere it is shown.
-      const inputTokens = estimateTokens(question)
-      const outputTokens = estimateTokens(answer)
-      yield {
-        type: 'usage',
-        usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens },
-      }
-      yield {
-        type: 'finish',
-        reason: { kind: parsed.calls.length > 0 ? 'tool-calls' : 'stop' },
+      } finally {
+        release()
       }
     } catch (error) {
       if (error instanceof CtuPortalError) {
         // The portal's one-active-session guard means the next attempt must
         // open the conversation again, after the user closes the other tab.
         if (error.code === 'INVALID_REQUEST' && /active chatbot session/iu.test(error.message)) {
-          this.claimedSessionId = undefined
-          this.claimedModel = undefined
+          const state = this.sessions.get(sessionKey(options))
+          if (state !== undefined) {
+            state.claimed = false
+            state.model = undefined
+          }
+          this.activePortalId = undefined
         }
         throw error
       }
@@ -476,6 +539,199 @@ export class CtuPortalAdapter {
     } finally {
       clearTimeout(timer)
       controller.abort()
+    }
+  }
+
+  /**
+   * Answer a local (non-portal) auxiliary request.
+   * @param {string} text
+   * @returns {AsyncGenerator<object, void, void>}
+   */
+  async * localAnswer(text) {
+    const answer = text.trim() === '' ? 'No separate response is needed.' : text
+    yield { type: 'block-start', index: 0, blockType: 'text' }
+    yield { type: 'text-delta', index: 0, text: answer }
+    yield { type: 'block-end', index: 0, block: { type: 'text', text: answer } }
+    const outputTokens = estimateTokens(answer)
+    yield {
+      type: 'usage',
+      usage: { inputTokens: 0, outputTokens, totalTokens: outputTokens },
+    }
+    yield { type: 'finish', reason: { kind: 'stop' } }
+  }
+
+  /**
+   * Open this session's portal conversation and stream one answer, parsing a
+   * DSML tool block into harness tool-call chunks as the text arrives.
+   * @param {object} context
+   * @returns {AsyncGenerator<object, void, void>}
+   */
+  async * portalAnswer({ options, signal, cookie, model, state, style, sessionOnly, acceptDisclaimer }) {
+    if (this.activePortalId !== state.id || !state.claimed || state.model !== model) {
+      await openConversation({
+        baseURL: this.options.baseURL,
+        cookie,
+        id: state.id,
+        model,
+        style,
+        sessionOnly,
+        acceptDisclaimer,
+        signal,
+      })
+      state.claimed = true
+      state.model = model
+      this.activePortalId = state.id
+    }
+
+    let question = buildQuestion(options, this.options)
+    if (question === '') {
+      throw new CtuPortalError('The portal adapter received no text to ask', 'INVALID_REQUEST')
+    }
+
+    let answer = ''
+    let emitted = 0
+    let markerAt = -1
+    let textStarted = false
+    let textContent = ''
+    let calls = []
+
+    // One retry with a smaller transcript if the portal's length guard fires.
+    // The guard is an unframed body, so no text was emitted when it throws.
+    for (let attempt = 0; attempt <= 1; attempt += 1) {
+      answer = ''
+      emitted = 0
+      markerAt = -1
+      textStarted = false
+      textContent = ''
+      calls = []
+      try {
+        for await (const delta of chatStream({
+          baseURL: this.options.baseURL,
+          cookie,
+          id: state.id,
+          model,
+          qst: question,
+          style,
+          sessionOnly,
+          signal,
+        })) {
+          answer += delta
+          if (markerAt !== -1) continue
+
+          const at = findToolMarker(answer)
+          if (at !== -1) {
+            const text = answer.slice(emitted, at)
+            if (text !== '') {
+              if (!textStarted) {
+                textStarted = true
+                yield { type: 'block-start', index: 0, blockType: 'text' }
+              }
+              textContent += text
+              yield { type: 'text-delta', index: 0, text }
+            }
+            emitted = at
+            markerAt = at
+            continue
+          }
+
+          // Hold back a suffix that could become the tool marker, so a marker
+          // split across portal chunks is never shown as visible text.
+          const safe = answer.length - longestMarkerSuffix(answer)
+          if (safe > emitted) {
+            const text = answer.slice(emitted, safe)
+            if (!textStarted) {
+              textStarted = true
+              yield { type: 'block-start', index: 0, blockType: 'text' }
+            }
+            textContent += text
+            yield { type: 'text-delta', index: 0, text }
+            emitted = safe
+          }
+        }
+        break
+      } catch (error) {
+        if (attempt === 0 && error instanceof CtuPortalError && error.code === 'CONTEXT_WINDOW_EXCEEDED') {
+          question = buildQuestion(options, {
+            ...this.options,
+            maxQuestionChars: Math.max(4_000, Math.floor(question.length * 0.6)),
+          })
+          continue
+        }
+        throw error
+      }
+    }
+
+    if (answer.trim() === '') {
+      throw new CtuPortalError('The portal returned an empty answer', 'EMPTY_RESPONSE')
+    }
+
+    if (markerAt === -1) {
+      const tail = answer.slice(emitted)
+      if (tail !== '') {
+        if (!textStarted) {
+          textStarted = true
+          yield { type: 'block-start', index: 0, blockType: 'text' }
+        }
+        textContent += tail
+        yield { type: 'text-delta', index: 0, text: tail }
+      }
+    } else {
+      const parsed = extractToolCalls(answer)
+      calls = parsed.calls
+      if (calls.length === 0) {
+        // The marker was incomplete or malformed: preserve the raw remainder
+        // as text rather than dropping the model's output.
+        const tail = answer.slice(emitted)
+        if (tail !== '') {
+          if (!textStarted) {
+            textStarted = true
+            yield { type: 'block-start', index: 0, blockType: 'text' }
+          }
+          textContent += tail
+          yield { type: 'text-delta', index: 0, text: tail }
+        }
+      }
+    }
+
+    if (textStarted) {
+      yield { type: 'block-end', index: 0, block: { type: 'text', text: textContent } }
+    }
+
+    const toolByName = new Map()
+    for (const tool of options.tools ?? []) {
+      if (tool !== null && typeof tool === 'object' && typeof tool.name === 'string') {
+        toolByName.set(tool.name, tool)
+      }
+    }
+
+    let index = textStarted ? 1 : 0
+    for (const call of calls) {
+      coerceArguments(call.arguments, toolByName.get(call.name))
+      const id = `call-${randomUUID()}`
+      const args = JSON.stringify(call.arguments)
+      yield { type: 'block-start', index, blockType: 'tool-call' }
+      yield { type: 'tool-call-delta', index, id, name: call.name, argumentsDelta: args }
+      yield {
+        type: 'block-end',
+        index,
+        block: { type: 'tool-call', id, name: call.name, arguments: args },
+      }
+      index += 1
+    }
+
+    // The portal reports no prompt or completion counts, so the harness would
+    // leave the Usage pill empty and the decode-speed figure blank. Emitting
+    // an estimate before the terminal chunk fills both; it is labelled as an
+    // estimate everywhere it is shown.
+    const inputTokens = estimateTokens(question)
+    const outputTokens = estimateTokens(answer)
+    yield {
+      type: 'usage',
+      usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens },
+    }
+    yield {
+      type: 'finish',
+      reason: { kind: calls.length > 0 ? 'tool-calls' : 'stop' },
     }
   }
 

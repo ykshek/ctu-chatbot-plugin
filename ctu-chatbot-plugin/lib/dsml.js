@@ -15,6 +15,44 @@
  * tool catalog and the resulting transcript back into the portal's `qst`.
  */
 
+/** The two opening markers a model emits for a tool-call block. */
+const TOOL_MARKERS = Object.freeze(['<｜DSML｜tool_calls>', '<|DSML|tool_calls>'])
+
+/**
+ * Index of the first tool-call opening marker, or -1.
+ * @param {string} text
+ * @returns {number}
+ */
+export function findToolMarker(text) {
+  let found = -1
+  for (const marker of TOOL_MARKERS) {
+    const at = text.indexOf(marker)
+    if (at !== -1 && (found === -1 || at < found)) found = at
+  }
+  return found
+}
+
+/**
+ * Length of the longest suffix of `text` that is a prefix of a tool marker.
+ * A streaming adapter holds that suffix back so a marker split across chunks
+ * is never emitted as visible text.
+ * @param {string} text
+ * @returns {number}
+ */
+export function longestMarkerSuffix(text) {
+  let longest = 0
+  for (const marker of TOOL_MARKERS) {
+    const max = Math.min(marker.length - 1, text.length)
+    for (let length = max; length > longest; length -= 1) {
+      if (text.endsWith(marker.slice(0, length))) {
+        longest = length
+        break
+      }
+    }
+  }
+  return longest
+}
+
 /** Opening-tag prefix; accepts U+FF5C (the model's fullwidth bar) and ASCII `|`. */
 const OPEN = String.raw`<\s*[|｜]\s*DSML\s*[|｜]\s*`
 
@@ -152,9 +190,10 @@ export function coerceArguments(args, tool) {
  * schema is not sent to the model; the adapter coerces common scalar types and
  * the harness validates the final call.
  * @param {readonly { name?: unknown, description?: unknown, parameters?: unknown }[] | undefined} tools
+ * @param {{ descriptions?: boolean }} [options]
  * @returns {string}
  */
-export function formatToolCatalog(tools) {
+export function formatToolCatalog(tools, options = {}) {
   if (!Array.isArray(tools) || tools.length === 0) return ''
   const lines = [
     'You can use the tools below. To call one or more tools, emit one tool-call block:',
@@ -167,12 +206,13 @@ export function formatToolCatalog(tools) {
       + 'After a tool result arrives, continue the task: call more tools or give the final answer.',
     'Available tools:',
   ]
+  const withDescriptions = options.descriptions !== false
   for (const tool of tools) {
     if (typeof tool?.name !== 'string' || tool.name === '') continue
-    const description = typeof tool.description === 'string'
-      ? tool.description.replace(/\s+/gu, ' ').trim().slice(0, 80)
-      : ''
-    lines.push(`- ${tool.name}(${signature(tool.parameters)}): ${description}`)
+    const description = !withDescriptions || typeof tool.description !== 'string'
+      ? ''
+      : tool.description.replace(/\s+/gu, ' ').trim().slice(0, 80)
+    lines.push(`- ${tool.name}(${signature(tool.parameters)})${description === '' ? '' : `: ${description}`}`)
   }
   return lines.join('\n')
 }
@@ -194,7 +234,14 @@ function signature(parameters) {
     const type = value !== null && typeof value === 'object'
       ? /** @type {{ type?: unknown }} */ (value).type
       : undefined
-    parts.push(`${name}${required.has(name) ? '*' : ''}${typeof type === 'string' ? `:${type}` : ''}`)
+    const enumValues = value !== null && typeof value === 'object'
+      && Array.isArray(/** @type {{ enum?: unknown }} */ (value).enum)
+      ? /** @type {{ enum?: unknown }} */ (value).enum
+        .filter(entry => typeof entry === 'string' || typeof entry === 'number')
+        .slice(0, 8)
+      : []
+    const choices = enumValues.length === 0 ? '' : `(${enumValues.join('|')})`
+    parts.push(`${name}${required.has(name) ? '*' : ''}${typeof type === 'string' ? `:${type}` : ''}${choices}`)
   }
   return parts.join(', ')
 }

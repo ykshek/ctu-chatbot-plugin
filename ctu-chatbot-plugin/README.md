@@ -30,12 +30,21 @@ For a headless install the same credential can come from the environment:
 export CTU_PORTAL_COOKIE='<Cookie header from a signed-in portal tab>'
 ```
 
-The portal has no native tool API. The plugin advertises the harness's tools in
-the prompt, parses the model's DSML tool calls into real harness tool calls, and
-feeds the tool results back on the next turn, so the harness agent loop can run
-through the portal. See [`docs/DETAIL.md`](docs/DETAIL.md) for the protocol, tool
-bridge, model list, options, quota and usage readings, failure mapping, and
-limitations.
+The plugin provides an agent runtime over the portal's text-only API:
+
+- it advertises the harness's tools and DSML call syntax in the prompt, parses
+  the model's DSML replies into real harness `tool-call` blocks, and feeds tool
+  results back on the next turn;
+- it forwards the harness system prompt and keeps the prompt under the portal's
+  length limit by capping tool results and trimming the transcript;
+- it keeps one portal conversation per DSH session and serializes them, and
+  handles session titles and compaction locally so they do not pollute or
+  overflow the agent's only conversation;
+- it maps the portal's length, quota, rate-limit, refusal, and session errors
+  to harness failure codes and exposes a bounded transient retry policy.
+
+See [`docs/DETAIL.md`](docs/DETAIL.md) for the protocol, tool bridge, model
+list, options, quota and usage readings, failure mapping, and limitations.
 
 After installing, pick the provider's models in **Settings → Models** (or set
 `agent-default-model` to `ctu-portal` / `ctu-dsv4`).

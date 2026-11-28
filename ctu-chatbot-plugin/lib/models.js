@@ -27,25 +27,25 @@ export const MODELS = Object.freeze([
     id: 'ctu-gpt5-mini',
     wire: 'GPTmini',
     name: 'GPT-5 mini',
-    description: 'GenAI chatbot answered by GPT-5 mini.',
+    description: 'GenAI chatbot answered by GPT-5 mini. Tool calls use DSML.',
   }),
   Object.freeze({
     id: 'ctu-gpt5',
     wire: 'GPT',
     name: 'GPT-5.2',
-    description: 'GenAI chatbot answered by GPT-5.2.',
+    description: 'GenAI chatbot answered by GPT-5.2. Tool calls use DSML.',
   }),
   Object.freeze({
     id: 'ctu-dsv4',
     wire: 'DSV4',
     name: 'DeepSeek V4 Flash',
-    description: 'GenAI chatbot answered by DeepSeek V4 Flash.',
+    description: 'GenAI chatbot answered by DeepSeek V4 Flash. Tool calls use DSML.',
   }),
   Object.freeze({
     id: 'ctu-qwen38',
     wire: 'QWen38',
     name: 'Qwen3.8 Flash',
-    description: 'GenAI chatbot answered by Qwen3.8-Flash-Next.',
+    description: 'GenAI chatbot answered by Qwen3.8-Flash-Next. Tool calls use DSML.',
   }),
 ])
 

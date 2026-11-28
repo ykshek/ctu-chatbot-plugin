@@ -35,8 +35,15 @@ export const DEFAULT_QUOTA_CACHE_MS = 30_000
 /** Environment variable a bare installation reads the session cookie from. */
 export const DEFAULT_COOKIE_ENV = 'CTU_PORTAL_COOKIE'
 
-/** Conservative declared context so the harness compacts before the portal truncates. */
-export const DEFAULT_CONTEXT_WINDOW = 32_000
+/**
+ * Declared context for harness compaction.
+ *
+ * The portal rejects a prompt somewhere above 12k characters (~3k tokens), so
+ * a 32k-token declaration would let the conversation grow far past the real
+ * limit before DSH compacts. The adapter also caps the prompt itself; this
+ * value makes the harness plan for the same budget.
+ */
+export const DEFAULT_CONTEXT_WINDOW = 4_000
 
 /** Full-request deadline; the portal streams a typical answer in a few seconds. */
 export const DEFAULT_REQUEST_TIMEOUT_MS = 120_000
@@ -87,7 +94,7 @@ export function resolveOptions(raw) {
     maxQuestionChars: positiveInteger(config.maxQuestionChars) ?? DEFAULT_MAX_QUESTION_CHARS,
     maxToolResultChars: positiveInteger(config.maxToolResultChars) ?? DEFAULT_MAX_TOOL_RESULT_CHARS,
     quotaCacheMs: positiveInteger(config.quotaCacheMs) ?? DEFAULT_QUOTA_CACHE_MS,
-    includeSystemPrompt: config.includeSystemPrompt === true,
+    includeSystemPrompt: config.includeSystemPrompt !== false,
   })
 }
 

@@ -32,11 +32,27 @@ const ANSWER = [
   '3. Follow the emailed link.\n',
 ].join('')
 
+const TOOL_DSML = [
+  "I'll inspect the project.\n\n",
+  '<｜DSML｜tool_calls>\n',
+  '<｜DSML｜invoke name="bash">\n',
+  '<｜DSML｜parameter name="description" string="true">List files</｜DSML｜parameter>\n',
+  '<｜DSML｜parameter name="command" string="true">pwd && ls -la</｜DSML｜parameter>\n',
+  '</｜DSML｜invoke>\n',
+  '<｜DSML｜invoke name="read">\n',
+  '<｜DSML｜parameter name="file_path" string="true">/tmp/example.txt</｜DSML｜parameter>\n',
+  '<｜DSML｜parameter name="offset" string="false">3</｜DSML｜parameter>\n',
+  '</｜DSML｜invoke>\n',
+  '</｜DSML｜tool_calls>',
+].join('')
+
 const REFUSAL = '很抱歉，我無法提供你問題的答案。你可以通過電郵IT.ServiceDesk @cityu.edu.hk或致電3442 - 8340（職員專線）或3442 - 6488（學生專線）聯繫IT Service Desk尋求進一步的協助。謝謝！'
 const CONFLICT = 'It seems you have another active Chatbot session. Please close all other sessions and reload this page. If all your other Chatbot session(s) have been closed, please wait for 5 minutes and reload this page again.'
 
 /** Conversation ids whose disclaimer was accepted by the mock. */
 const agreed = new Set()
+/** Per-conversation count for the one-shot length-guard model. */
+const tooLongOnce = new Map()
 /** Conversation ids whose user record was created by the mock. */
 const created = new Set()
 
@@ -176,21 +192,41 @@ const server = createServer(async (req, res) => {
       return
     }
     if (body.model === 'TOOLS') {
-      const answer = [
-        "I'll inspect the project.\n\n",
-        '<｜DSML｜tool_calls>\n',
-        '<｜DSML｜invoke name="bash">\n',
-        '<｜DSML｜parameter name="description" string="true">List files</｜DSML｜parameter>\n',
-        '<｜DSML｜parameter name="command" string="true">pwd && ls -la</｜DSML｜parameter>\n',
-        '</｜DSML｜invoke>\n',
-        '<｜DSML｜invoke name="read">\n',
-        '<｜DSML｜parameter name="file_path" string="true">/tmp/example.txt</｜DSML｜parameter>\n',
-        '<｜DSML｜parameter name="offset" string="false">3</｜DSML｜parameter>\n',
-        '</｜DSML｜invoke>\n',
-        '</｜DSML｜tool_calls>',
-      ].join('')
       res.writeHead(200, { 'content-type': 'text/plain' })
-      res.end(frame(body.id, answer))
+      res.end(frame(body.id, TOOL_DSML))
+      return
+    }
+    if (body.model === 'TOOLS_SPLIT') {
+      res.writeHead(200, { 'content-type': 'text/plain' })
+      const framed = frame(body.id, TOOL_DSML)
+      const at = framed.indexOf('tool_calls')
+      for (const piece of [framed.slice(0, at), framed.slice(at, at + 4), framed.slice(at + 4, 120), framed.slice(120)]) {
+        res.write(piece)
+        await new Promise(r => setTimeout(r, 5))
+      }
+      res.end()
+      return
+    }
+    if (body.model === 'TOOLONG_ONCE') {
+      const count = tooLongOnce.get(body.id) ?? 0
+      tooLongOnce.set(body.id, count + 1)
+      if (count === 0) {
+        res.writeHead(200, { 'content-type': 'text/plain' })
+        res.end('Your message is too long to be processed. Please reduce the length of your message and try again.')
+        return
+      }
+      res.writeHead(200, { 'content-type': 'text/plain' })
+      res.end(frame(body.id, ANSWER))
+      return
+    }
+    if (body.model === 'QUOTA') {
+      res.writeHead(200, { 'content-type': 'text/plain' })
+      res.end('You have reached your monthly quota. Please contact the IT Service Desk.')
+      return
+    }
+    if (body.model === 'RATELIMIT') {
+      res.writeHead(200, { 'content-type': 'text/plain' })
+      res.end('Too many requests. Please slow down and try again later.')
       return
     }
     if (body.model === 'CONFLICT') {
@@ -252,6 +288,7 @@ function makeAdapter(overrides = {}) {
     baseURL,
     cookie: 'JSESSIONID=test-cookie; portal=1',
     requestTimeoutMs: 5000,
+    includeSystemPrompt: false,
     ...overrides,
   }))
 }
@@ -422,7 +459,7 @@ await check('parses DSML tool calls into harness blocks and finishes with tool-c
   ]
   const chunks = await collect(adapter.stream({ provider: 'ctu-portal', model: 'TOOLS', messages: history, tools }))
   const textEnd = chunks.find(c => c.type === 'block-end' && c.block.type === 'text')
-  assert.equal(textEnd.block.text, "I'll inspect the project.")
+  assert.equal(textEnd.block.text.trim(), "I'll inspect the project.")
   const calls = chunks.filter(c => c.type === 'block-end' && c.block.type === 'tool-call').map(c => c.block)
   assert.equal(calls.length, 2)
   assert.equal(calls[0].name, 'bash')
@@ -454,7 +491,7 @@ await check('buildQuestion includes the tool catalog and correlates calls with r
       description: 'Run a shell command.',
       parameters: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'] },
     }],
-  }, { includeSystemPrompt: false, maxQuestionChars: 24000 })
+  }, { includeSystemPrompt: false, maxQuestionChars: 24000, maxToolResultChars: 2000 })
   assert.match(question, /^You can use the tools below/u)
   assert.match(question, /- bash\(command\*:string\): Run a shell command\./u)
   assert.match(question, /Assistant: Let me look\./u)
@@ -547,7 +584,7 @@ await check('catalog exposes every model with text-only input', async () => {
   const resolved = await adapter.resolveModel('ctu-portal', 'ctu-dsv4')
   assert.equal(resolved.id, 'ctu-dsv4')
   assert.equal(resolved.name, 'DeepSeek V4 Flash')
-  assert.deepEqual(resolved.context, { contextWindow: 32000 })
+  assert.deepEqual(resolved.context, { contextWindow: 4000 })
 })
 
 await check('prepareCall binds model metadata and stream', async () => {
@@ -736,6 +773,125 @@ await check('buildQuestion truncates the transcript but keeps the header', async
   assert.match(question, /A{100}/u, 'the start of the transcript is kept')
   assert.ok(question.endsWith('B'.repeat(100)), 'latest transcript tail is kept')
   assert.ok(question.length <= settings.maxQuestionChars + 40, 'stays near the configured cap')
+})
+
+
+await check('synthesizes session titles without touching the portal', async () => {
+  seen.length = 0
+  const adapter = makeAdapter()
+  const chunks = await collect(adapter.stream({
+    provider: 'ctu-portal',
+    model: 'ctu-dsv4',
+    purpose: 'session-title',
+    messages: [{ role: 'user', content: [{ type: 'text', text: '# Audit the fcitx5 IME\nmore detail' }] }],
+  }))
+  assert.equal(chunks.find(c => c.type === 'block-end').block.text, 'Audit the fcitx5 IME')
+  assert.equal(chunks.at(-1).type, 'finish')
+  assert.deepEqual(seen, [], 'no portal request for an auxiliary call')
+})
+
+await check('compacts locally without touching the portal', async () => {
+  seen.length = 0
+  const adapter = makeAdapter()
+  const chunks = await collect(adapter.stream({
+    provider: 'ctu-portal',
+    model: 'ctu-dsv4',
+    purpose: 'compaction',
+    messages: [
+      { role: 'user', content: [{ type: 'text', text: 'Audit this project.' }] },
+      { role: 'assistant', content: [{ type: 'text', text: 'I will inspect it.' }] },
+    ],
+  }))
+  const text = chunks.find(c => c.type === 'block-end').block.text
+  assert.match(text, /Compacted conversation/u)
+  assert.match(text, /Audit this project/u)
+  assert.deepEqual(seen, [], 'no portal request for an auxiliary call')
+})
+
+await check('keeps a separate portal conversation per DSH session', async () => {
+  seen.length = 0
+  const adapter = makeAdapter()
+  await collect(adapter.stream({ provider: 'ctu-portal', model: 'ctu-gpt5', sessionId: 's1', messages: history }))
+  await collect(adapter.stream({ provider: 'ctu-portal', model: 'ctu-gpt5', sessionId: 's2', messages: history }))
+  await collect(adapter.stream({ provider: 'ctu-portal', model: 'ctu-gpt5', sessionId: 's1', messages: history }))
+  const opens = seen.filter(entry => entry.path.endsWith('/getchathistory'))
+  const chats = seen.filter(entry => entry.path.endsWith('/getchatresponse'))
+  assert.equal(opens.length, 3, 'switching sessions reopens the conversation')
+  assert.notEqual(opens[0].body.id, opens[1].body.id, 'different DSH sessions get different portal ids')
+  assert.equal(opens[2].body.id, opens[0].body.id, 'returning to a session reuses its portal id')
+  assert.equal(chats[0].body.id, opens[0].body.id)
+  assert.equal(chats[1].body.id, opens[1].body.id)
+  assert.equal(chats[2].body.id, opens[0].body.id)
+})
+
+await check('retries once with a smaller prompt after a length warning', async () => {
+  seen.length = 0
+  const adapter = makeAdapter()
+  const chunks = await collect(adapter.stream({
+    provider: 'ctu-portal',
+    model: 'TOOLONG_ONCE',
+    messages: [{ role: 'user', content: [{ type: 'text', text: 'A'.repeat(8000) }] }],
+  }))
+  assert.equal(chunks.find(c => c.type === 'block-end').block.text, ANSWER)
+  const chats = seen.filter(entry => entry.path.endsWith('/getchatresponse'))
+  assert.equal(chats.length, 2, 'the adapter retried the request')
+  assert.ok(chats[1].body.qst.length < chats[0].body.qst.length, 'the retry prompt is smaller')
+})
+
+await check('classifies quota and rate-limit text', async () => {
+  for (const [model, code] of [['QUOTA', 'ACCOUNT_QUOTA'], ['RATELIMIT', 'RATE_LIMIT']]) {
+    const adapter = makeAdapter()
+    await assert.rejects(
+      () => collect(adapter.stream({ provider: 'ctu-portal', model, messages: history })),
+      (error) => failureOf(error).code === code,
+    )
+  }
+})
+
+await check('publishes a bounded transient retry policy', async () => {
+  const policy = makeAdapter().providerRetryPolicy()
+  assert.equal(policy.mode, 'normal')
+  assert.equal(policy.maxRetries, 2)
+  assert.ok(policy.retryableCodes.includes('RATE_LIMIT'))
+  assert.ok(policy.retryableCodes.includes('SERVER'))
+  assert.ok(policy.retryableCodes.includes('TIMEOUT'))
+})
+
+await check('forwards the system prompt and trims catalog descriptions', async () => {
+  assert.equal(resolveOptions({}).includeSystemPrompt, true)
+  assert.equal(resolveOptions({ includeSystemPrompt: false }).includeSystemPrompt, false)
+  const optionSet = {
+    messages: [
+      { role: 'system', content: [{ type: 'text', text: 'SYSTEM-RULES' }] },
+      { role: 'user', content: [{ type: 'text', text: 'Audit.' }] },
+    ],
+    tools: [{
+      name: 'bash',
+      description: 'Run a shell command.',
+      parameters: {
+        type: 'object',
+        properties: { command: { type: 'string' }, mode: { type: 'string', enum: ['fast', 'slow'] } },
+        required: ['command'],
+      },
+    }],
+  }
+  const withSystem = buildQuestion(optionSet, { includeSystemPrompt: true, maxQuestionChars: 12000, maxToolResultChars: 2000 })
+  assert.match(withSystem, /^System: SYSTEM-RULES/u)
+  assert.match(withSystem, /- bash\(command\*:string, mode:string\(fast\|slow\)\)/u)
+  assert.ok(!withSystem.includes('Run a shell command'), 'descriptions are omitted when the system prompt carries them')
+  const withoutSystem = buildQuestion(optionSet, { includeSystemPrompt: false, maxQuestionChars: 12000, maxToolResultChars: 2000 })
+  assert.ok(!withoutSystem.startsWith('System:'))
+  assert.match(withoutSystem, /: Run a shell command\./u)
+})
+
+await check('streams a tool marker split across chunks', async () => {
+  const adapter = makeAdapter()
+  const tools = [{ name: 'bash', description: 'Run a shell command.', parameters: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'] } }]
+  const chunks = await collect(adapter.stream({ provider: 'ctu-portal', model: 'TOOLS_SPLIT', messages: history, tools }))
+  const text = chunks.find(c => c.type === 'block-end' && c.block.type === 'text')
+  assert.equal(text.block.text.trim(), "I'll inspect the project.")
+  assert.equal(chunks.filter(c => c.type === 'block-end' && c.block.type === 'tool-call').length, 2)
+  assert.equal(chunks.at(-1).reason.kind, 'tool-calls')
 })
 
 server.close()
