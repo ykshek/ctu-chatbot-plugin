@@ -1,10 +1,11 @@
 /**
  * Standalone verification for the CityUHK portal adapter.
  *
- * Runs the real adapter against a local mock of the portal protocol and checks
- * the exact harness contract: chunk order, assembled message, flattened `qst`,
- * cookie handling, and failure classification through the harness's own
- * `normalizeLlmFailure`.
+ * Runs the real adapter against a local mock of the portal's `chatbot` module
+ * and checks the exact harness contract: chunk order, assembled message, the
+ * flattened `qst`, the `,,,` answer frame, style/sessionOnly fields, cookie
+ * handling, disclaimer handling, and failure classification through the
+ * harness's own `normalizeLlmFailure`.
  *
  * Run: node verify-cityu-portal.mjs
  */
@@ -20,7 +21,7 @@ const FAILURE = 'file:///var/home/linuxbrew/.linuxbrew/lib/node_modules/@deepsee
 const { BlockAssembler } = await import(LLM)
 const { normalizeLlmFailure } = await import(FAILURE)
 
-/** @type {{ path: string, body: any, cookie: string | undefined, userAgent: string | undefined }[]} */
+/** @type {{ path: string, body: any, cookie: string | undefined, userAgent: string | undefined, contentType: string | undefined }[]} */
 const seen = []
 
 const ANSWER = [
@@ -29,6 +30,19 @@ const ANSWER = [
   '2. Confirm your EID.\n',
   '3. Follow the emailed link.\n',
 ].join('')
+
+const REFUSAL = '很抱歉，我無法提供你問題的答案。你可以通過電郵IT.ServiceDesk @cityu.edu.hk或致電3442 - 8340（職員專線）或3442 - 6488（學生專線）聯繫IT Service Desk尋求進一步的協助。謝謝！'
+const CONFLICT = 'It seems you have another active Chatbot session. Please close all other sessions and reload this page. If all your other Chatbot session(s) have been closed, please wait for 5 minutes and reload this page again.'
+
+/** Conversation ids whose disclaimer was accepted by the mock. */
+const agreed = new Set()
+/** Conversation ids whose user record was created by the mock. */
+const created = new Set()
+
+/** @param {string} id @param {string} text */
+function frame(id, text) {
+  return `${id},,,${text}`
+}
 
 const server = createServer(async (req, res) => {
   let raw = ''
@@ -43,15 +57,12 @@ const server = createServer(async (req, res) => {
     contentType: req.headers['content-type'],
   })
 
-  if (req.url === '/startnewconversation') {
+  const path = req.url ?? ''
+
+  if (path.endsWith('/getchathistory')) {
     if (body.model === 'AUTHFAIL') {
       res.writeHead(401, { 'content-type': 'text/plain' })
       res.end('unauthorized')
-      return
-    }
-    if (body.model === 'CONFLICT') {
-      res.writeHead(200, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ status: 'error', errorMsg: 'It seems you have another active Chatbot session. Please close all other sessions.' }))
       return
     }
     if (body.model === 'DENIED') {
@@ -62,6 +73,21 @@ const server = createServer(async (req, res) => {
     if (body.model === 'REFUSED') {
       res.writeHead(200, { 'content-type': 'application/json' })
       res.end(JSON.stringify({ status: 'fail' }))
+      return
+    }
+    if (body.model === 'CONFLICT') {
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ status: 'fail', errorMsg: 'It seems you have another active Chatbot session. Please close all other sessions.' }))
+      return
+    }
+    if (body.model === 'DISCLAIMER' && !agreed.has(body.id)) {
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ status: 'showdisclaimer' }))
+      return
+    }
+    if (body.model === 'NEWUSER' && !created.has(body.id)) {
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ status: 'newUser' }))
       return
     }
     if (body.model === 'HTMLSESSION') {
@@ -75,11 +101,25 @@ const server = createServer(async (req, res) => {
       return
     }
     res.writeHead(200, { 'content-type': 'application/json' })
-    res.end(JSON.stringify({ status: 'success', errorMsg: '' }))
+    res.end(JSON.stringify({ status: 'success', errorMsg: '', chatMessages: [], style: '1', sessionOnly: false }))
     return
   }
 
-  if (req.url === '/getchatresponse') {
+  if (path.endsWith('/agreeandproceed')) {
+    agreed.add(body.id)
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({ status: 'success' }))
+    return
+  }
+
+  if (path.endsWith('/createnewuser')) {
+    created.add(body.id)
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({ status: 'success' }))
+    return
+  }
+
+  if (path.endsWith('/getchatresponse')) {
     if (body.model === 'EMPTY') {
       res.writeHead(200, { 'content-type': 'text/plain' })
       res.end('')
@@ -93,12 +133,12 @@ const server = createServer(async (req, res) => {
     if (body.model === 'SLOW') {
       setTimeout(() => {
         res.writeHead(200, { 'content-type': 'text/plain' })
-        res.end('late')
+        res.end(frame(body.id, 'late'))
       }, 1500)
       return
     }
     if (body.model === 'GZIP') {
-      const gz = gzipSync(Buffer.from(ANSWER, 'utf8'))
+      const gz = gzipSync(Buffer.from(frame(body.id, ANSWER), 'utf8'))
       res.writeHead(200, { 'content-type': 'text/plain', 'content-encoding': 'gzip' })
       // Slice mid-codepoint to exercise the UTF-8 stream decoder.
       for (const slice of [gz.subarray(0, 10), gz.subarray(10, 11), gz.subarray(11)]) {
@@ -107,9 +147,42 @@ const server = createServer(async (req, res) => {
       res.end()
       return
     }
-    // Default: plain chunked markdown.
+    if (body.model === 'SPLITPREFIX') {
+      res.writeHead(200, { 'content-type': 'text/plain' })
+      const framed = frame(body.id, ANSWER)
+      const separator = framed.indexOf(',,,')
+      // Split the separator itself and the answer after it, without overlap.
+      for (const piece of [framed.slice(0, separator + 1), framed.slice(separator + 1, separator + 4), framed.slice(separator + 4)]) {
+        res.write(piece)
+        await new Promise(r => setTimeout(r, 5))
+      }
+      res.end()
+      return
+    }
+    if (body.model === 'NOPREFIX') {
+      res.writeHead(200, { 'content-type': 'text/plain' })
+      res.end('just an answer')
+      return
+    }
+    if (body.model === 'REFUSALTEXT') {
+      res.writeHead(200, { 'content-type': 'text/plain' })
+      res.end(REFUSAL)
+      return
+    }
+    if (body.model === 'REFUSALFRAMED') {
+      res.writeHead(200, { 'content-type': 'text/plain' })
+      res.end(frame(body.id, REFUSAL))
+      return
+    }
+    if (body.model === 'CONFLICT') {
+      res.writeHead(200, { 'content-type': 'text/plain' })
+      res.end(CONFLICT)
+      return
+    }
+    // Default: framed chunked markdown.
+    const framed = frame(body.id, ANSWER)
     res.writeHead(200, { 'content-type': 'text/plain' })
-    for (const piece of [ANSWER.slice(0, 20), ANSWER.slice(20, 60), ANSWER.slice(60)]) {
+    for (const piece of [framed.slice(0, 20), framed.slice(20, 60), framed.slice(60)]) {
       res.write(piece)
       await new Promise(r => setTimeout(r, 5))
     }
@@ -117,9 +190,20 @@ const server = createServer(async (req, res) => {
     return
   }
 
-  if (req.url === '/getchathistory') {
+  if (path.endsWith('/getusage')) {
     res.writeHead(200, { 'content-type': 'application/json' })
-    res.end(JSON.stringify({ status: 'success', chatMessages: [] }))
+    res.end(JSON.stringify({
+      model: [
+        { modelValue: 'GPTmini', modelName: 'GPTmini', lastUsed: false },
+        { modelValue: 'GPT', modelName: 'GPT', lastUsed: true },
+        { modelValue: 'DSV4', modelName: 'DSV4', lastUsed: false },
+        { modelValue: 'QWen38', modelName: 'QWen38', lastUsed: false },
+      ],
+      quota: 15000,
+      quotaLeft: 14500,
+      nextQuotaUpdate: '2026-12-21T00:00:00',
+      lastWordsConsumption: 1680,
+    }))
     return
   }
 
@@ -129,7 +213,7 @@ const server = createServer(async (req, res) => {
 
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
 const { port } = /** @type {{ port: number }} */ (server.address())
-const baseURL = `http://127.0.0.1:${port}`
+const baseURL = `http://127.0.0.1:${port}/chatbot`
 
 /** @param {unknown} error */
 function failureOf(error) {
@@ -170,7 +254,7 @@ const history = [
   { role: 'user', content: [{ type: 'text', text: 'And if the link expires?' }] },
 ]
 
-await check('happy path streams one text block and stops', async () => {
+await check('happy path streams one text block without the conversation-id frame', async () => {
   const adapter = makeAdapter()
   const chunks = await collect(adapter.stream({ provider: 'cityu-portal', model: 'cityu-gpt5', messages: history }))
 
@@ -180,6 +264,8 @@ await check('happy path streams one text block and stops', async () => {
   assert.ok(end, 'has block-end')
   assert.equal(end.block.type, 'text')
   assert.equal(end.block.text, ANSWER, 'block-end carries the complete answer')
+  assert.ok(!end.block.text.includes(',,,'), 'the conversation-id frame is stripped')
+  assert.ok(!end.block.text.includes(adapter.sessionId), 'the conversation id is not leaked into the answer')
   assert.deepEqual(chunks.at(-1), { type: 'finish', reason: { kind: 'stop' } })
   // The portal reports no token counts, so the adapter estimates them; the
   // chunk must land before the terminal chunk so the assembler records it.
@@ -201,7 +287,7 @@ await check('flattens the transcript into one qst and omits the system prompt by
   seen.length = 0
   const adapter = makeAdapter()
   await collect(adapter.stream({ provider: 'cityu-portal', model: 'cityu-gpt5', messages: history, system: 'SYSTEM-FIELD' }))
-  const chat = seen.find(entry => entry.path === '/getchatresponse')
+  const chat = seen.find(entry => entry.path.endsWith('/getchatresponse'))
   assert.ok(chat, 'getchatresponse was called')
   const qst = chat.body.qst
   assert.match(qst, /^User: How do I reset my CityU portal password\?/u)
@@ -211,6 +297,8 @@ await check('flattens the transcript into one qst and omits the system prompt by
   assert.ok(!qst.includes('SYSTEM-FIELD'), 'options.system omitted by default')
   assert.equal(chat.body.model, 'GPT', 'cityu-gpt5 maps to the wire value GPT')
   assert.equal(chat.body.id, adapter.sessionId)
+  assert.equal(chat.body.style, '1', 'balanced thinking is the default style')
+  assert.equal(chat.body.sessionOnly, false)
   assert.equal(chat.cookie, 'JSESSIONID=test-cookie; portal=1')
   assert.equal(chat.contentType, 'application/json')
   assert.match(chat.userAgent ?? '', /^deepseek-harness\//u, 'attribution user-agent present')
@@ -220,51 +308,121 @@ await check('includeSystemPrompt forwards the system prompt', async () => {
   seen.length = 0
   const adapter = makeAdapter({ includeSystemPrompt: true })
   await collect(adapter.stream({ provider: 'cityu-portal', model: 'cityu-gpt5', messages: history, system: 'SYSTEM-FIELD' }))
-  const qst = seen.find(entry => entry.path === '/getchatresponse').body.qst
+  const qst = seen.find(entry => entry.path.endsWith('/getchatresponse')).body.qst
   assert.match(qst, /^System: SYSTEM-FIELD/u)
 })
 
-await check('claims the conversation before asking', async () => {
+await check('opens the conversation with getchathistory before asking', async () => {
   seen.length = 0
   const adapter = makeAdapter()
   await collect(adapter.stream({ provider: 'cityu-portal', model: 'cityu-gpt5', messages: history }))
-  assert.deepEqual(seen.map(entry => entry.path), ['/startnewconversation', '/getchatresponse'])
-  assert.deepEqual(Object.keys(seen[0].body).sort(), ['id', 'model'])
-  assert.deepEqual(Object.keys(seen[1].body).sort(), ['id', 'model', 'qst'])
+  assert.deepEqual(
+    seen.map(entry => entry.path.split('/').at(-1)),
+    ['getchathistory', 'getchatresponse'],
+  )
+  assert.deepEqual(Object.keys(seen[0].body).sort(), ['id', 'model', 'qst', 'sessionOnly', 'style'])
+  assert.equal(seen[0].body.qst, 'newSession', 'the session is opened the way the portal page opens it')
+  assert.equal(seen[0].body.style, '1')
+  assert.equal(seen[0].body.sessionOnly, false)
+  assert.deepEqual(Object.keys(seen[1].body).sort(), ['id', 'model', 'qst', 'sessionOnly', 'style'])
 })
 
-await check('claims the conversation once per id, not on every turn', async () => {
+await check('opens the conversation once per id, not on every turn', async () => {
   seen.length = 0
   const adapter = makeAdapter()
   await collect(adapter.stream({ provider: 'cityu-portal', model: 'cityu-gpt5', messages: history }))
   await collect(adapter.stream({ provider: 'cityu-portal', model: 'cityu-gpt5', messages: history }))
   assert.deepEqual(
-    seen.map(entry => entry.path),
-    ['/startnewconversation', '/getchatresponse', '/getchatresponse'],
+    seen.map(entry => entry.path.split('/').at(-1)),
+    ['getchathistory', 'getchatresponse', 'getchatresponse'],
   )
 })
 
-await check('reads chat history as the settings-page probe', async () => {
+await check('reopens the conversation when the model changes', async () => {
   seen.length = 0
   const adapter = makeAdapter()
-  const result = await adapter.probeChat()
-  assert.equal(result.status, 'success')
-  assert.equal(seen[0].path, '/getchathistory')
-  assert.equal(seen[0].body.model, 'IT-Portal')
+  await collect(adapter.stream({ provider: 'cityu-portal', model: 'cityu-gpt5', messages: history }))
+  await collect(adapter.stream({ provider: 'cityu-portal', model: 'cityu-dsv4', messages: history }))
+  assert.deepEqual(
+    seen.map(entry => entry.path.split('/').at(-1)),
+    ['getchathistory', 'getchatresponse', 'getchathistory', 'getchatresponse'],
+  )
+})
+
+await check('thinking effort is configurable', async () => {
+  seen.length = 0
+  const adapter = makeAdapter({ style: 'deep', sessionOnly: true })
+  await collect(adapter.stream({ provider: 'cityu-portal', model: 'cityu-dsv4', messages: history }))
+  const chat = seen.find(entry => entry.path.endsWith('/getchatresponse'))
+  assert.equal(chat.body.style, '2')
+  assert.equal(chat.body.sessionOnly, true)
+  assert.equal(resolveOptions({ style: 'quick' }).style, '0')
+  assert.equal(resolveOptions({ style: 2 }).style, '2')
+  assert.equal(resolveOptions({ style: 'nonsense' }).style, '1')
 })
 
 await check('unknown model ids are forwarded verbatim', async () => {
   seen.length = 0
   const adapter = makeAdapter()
   await collect(adapter.stream({ provider: 'cityu-portal', model: 'new-backend', messages: history }))
-  assert.equal(seen[1].body.model, 'new-backend')
+  assert.equal(seen.find(entry => entry.path.endsWith('/getchatresponse')).body.model, 'new-backend')
 })
 
-await check('reads a gzip-chunked body split mid-codepoint', async () => {
+await check('reads a gzip-chunked framed body split mid-codepoint', async () => {
   const adapter = makeAdapter()
   const chunks = await collect(adapter.stream({ provider: 'cityu-portal', model: 'GZIP', messages: history }))
   const end = chunks.find(c => c.type === 'block-end')
   assert.equal(end.block.text, ANSWER)
+})
+
+await check('handles a conversation-id frame split across chunks', async () => {
+  const adapter = makeAdapter()
+  const chunks = await collect(adapter.stream({ provider: 'cityu-portal', model: 'SPLITPREFIX', messages: history }))
+  const end = chunks.find(c => c.type === 'block-end')
+  assert.equal(end.block.text, ANSWER)
+})
+
+await check('a plain-text portal refusal fails CONTENT_REFUSED', async () => {
+  const adapter = makeAdapter()
+  await assert.rejects(
+    () => collect(adapter.stream({ provider: 'cityu-portal', model: 'REFUSALTEXT', messages: history })),
+    (error) => {
+      const failure = failureOf(error)
+      assert.equal(failure.code, 'CONTENT_REFUSED')
+      assert.match(failure.message, /refused to answer/iu)
+      return true
+    },
+  )
+})
+
+await check('a framed portal refusal also fails CONTENT_REFUSED', async () => {
+  const adapter = makeAdapter()
+  await assert.rejects(
+    () => collect(adapter.stream({ provider: 'cityu-portal', model: 'REFUSALFRAMED', messages: history })),
+    (error) => failureOf(error).code === 'CONTENT_REFUSED',
+  )
+})
+
+await check('the one-active-session guard fails INVALID_REQUEST and clears the claim', async () => {
+  const adapter = makeAdapter()
+  await assert.rejects(
+    () => collect(adapter.stream({ provider: 'cityu-portal', model: 'CONFLICT', messages: history })),
+    (error) => {
+      const failure = failureOf(error)
+      assert.equal(failure.code, 'INVALID_REQUEST')
+      assert.match(failure.message, /active chatbot session/iu)
+      return true
+    },
+  )
+  assert.equal(adapter.claimedSessionId, undefined, 'the next turn reopens the conversation')
+})
+
+await check('an answer without the conversation-id frame fails MALFORMED_RESPONSE', async () => {
+  const adapter = makeAdapter()
+  await assert.rejects(
+    () => collect(adapter.stream({ provider: 'cityu-portal', model: 'NOPREFIX', messages: history })),
+    (error) => failureOf(error).code === 'MALFORMED_RESPONSE',
+  )
 })
 
 await check('catalog exposes every model with text-only input', async () => {
@@ -290,6 +448,52 @@ await check('prepareCall binds model metadata and stream', async () => {
   assert.equal(chunks.at(-1).type, 'finish')
 })
 
+await check('reads quota from the same chatbot module', async () => {
+  seen.length = 0
+  const adapter = makeAdapter()
+  const reading = await adapter.readQuota('GPT')
+  assert.equal(reading.quota, 15000)
+  assert.equal(reading.quotaLeft, 14500)
+  assert.equal(seen.at(-1).path, '/chatbot/getusage')
+  assert.equal(seen.at(-1).body.model, 'GPT')
+  assert.equal(seen.at(-1).body.style, '1')
+  assert.equal(seen.at(-1).body.sessionOnly, false)
+})
+
+await check('a disclaimer is reported, not accepted silently', async () => {
+  seen.length = 0
+  const adapter = makeAdapter()
+  await assert.rejects(
+    () => collect(adapter.stream({ provider: 'cityu-portal', model: 'DISCLAIMER', messages: history })),
+    (error) => {
+      const failure = failureOf(error)
+      assert.equal(failure.code, 'INVALID_REQUEST')
+      assert.match(failure.message, /disclaimer/iu)
+      return true
+    },
+  )
+  assert.ok(!seen.some(entry => entry.path.endsWith('/agreeandproceed')), 'no silent consent by default')
+})
+
+await check('acceptDisclaimer acknowledges and opens the conversation', async () => {
+  seen.length = 0
+  const adapter = makeAdapter({ acceptDisclaimer: true })
+  const chunks = await collect(adapter.stream({ provider: 'cityu-portal', model: 'DISCLAIMER', messages: history }))
+  assert.equal(chunks.find(c => c.type === 'block-end').block.text, ANSWER)
+  assert.deepEqual(
+    seen.map(entry => entry.path.split('/').at(-1)),
+    ['getchathistory', 'agreeandproceed', 'getchathistory', 'getchatresponse'],
+  )
+})
+
+await check('a new user record is created after consent', async () => {
+  seen.length = 0
+  const adapter = makeAdapter({ acceptDisclaimer: true })
+  const chunks = await collect(adapter.stream({ provider: 'cityu-portal', model: 'NEWUSER', messages: history }))
+  assert.equal(chunks.find(c => c.type === 'block-end').block.text, ANSWER)
+  assert.ok(seen.some(entry => entry.path.endsWith('/createnewuser')))
+})
+
 await check('missing cookie fails MISSING_CREDENTIAL', async () => {
   const adapter = new CityuPortalAdapter(resolveOptions({ baseURL, cookieEnv: 'CITYU_TEST_ABSENT_COOKIE' }))
   delete process.env.CITYU_TEST_ABSENT_COOKIE
@@ -308,23 +512,11 @@ await check('env cookie is honored', async () => {
   delete process.env.CITYU_TEST_PRESENT_COOKIE
 })
 
-await check('401 fails INVALID_CREDENTIAL', async () => {
+await check('401 on the session handshake fails INVALID_CREDENTIAL', async () => {
   const adapter = makeAdapter()
   await assert.rejects(
     () => collect(adapter.stream({ provider: 'cityu-portal', model: 'AUTHFAIL', messages: history })),
     (error) => { const f = failureOf(error); assert.equal(f.status, 401); return f.code === 'INVALID_CREDENTIAL' },
-  )
-})
-
-await check('session conflict fails INVALID_REQUEST with guidance', async () => {
-  const adapter = makeAdapter()
-  await assert.rejects(
-    () => collect(adapter.stream({ provider: 'cityu-portal', model: 'CONFLICT', messages: history })),
-    (error) => {
-      const f = failureOf(error)
-      assert.match(f.message, /active chatbot session/iu)
-      return f.code === 'INVALID_REQUEST'
-    },
   )
 })
 
@@ -340,14 +532,27 @@ await check('AccessDenied status fails INVALID_CREDENTIAL', async () => {
   )
 })
 
-await check('a reasonless refusal names the status and the remedy', async () => {
+await check('a session handshake refusal names the status', async () => {
   const adapter = makeAdapter()
   await assert.rejects(
     () => collect(adapter.stream({ provider: 'cityu-portal', model: 'REFUSED', messages: history })),
     (error) => {
       const f = failureOf(error)
       assert.match(f.message, /status "fail"/u)
-      assert.match(f.message, /Close the portal chatbot/iu)
+      assert.match(f.message, /Close the CityUHK Chatbot/iu)
+      return f.code === 'INVALID_REQUEST'
+    },
+  )
+})
+
+await check('a session conflict names the active session and the remedy', async () => {
+  const adapter = makeAdapter()
+  await assert.rejects(
+    () => collect(adapter.stream({ provider: 'cityu-portal', model: 'CONFLICT', messages: history })),
+    (error) => {
+      const f = failureOf(error)
+      assert.match(f.message, /active chatbot session/iu)
+      assert.match(f.message, /Close the CityUHK Chatbot/iu)
       return f.code === 'INVALID_REQUEST'
     },
   )
@@ -369,7 +574,7 @@ await check('login page on getchatresponse fails INVALID_CREDENTIAL', async () =
   )
 })
 
-await check('login page on startnewconversation fails INVALID_CREDENTIAL', async () => {
+await check('login page on the session handshake fails INVALID_CREDENTIAL', async () => {
   const adapter = makeAdapter()
   await assert.rejects(
     () => collect(adapter.stream({ provider: 'cityu-portal', model: 'HTMLSESSION', messages: history })),
