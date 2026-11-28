@@ -170,7 +170,7 @@ export function formatToolCatalog(tools) {
   for (const tool of tools) {
     if (typeof tool?.name !== 'string' || tool.name === '') continue
     const description = typeof tool.description === 'string'
-      ? tool.description.replace(/\s+/gu, ' ').trim().slice(0, 200)
+      ? tool.description.replace(/\s+/gu, ' ').trim().slice(0, 80)
       : ''
     lines.push(`- ${tool.name}(${signature(tool.parameters)}): ${description}`)
   }

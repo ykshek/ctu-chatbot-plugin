@@ -84,6 +84,14 @@ Arguments marked `string="false"` are parsed as JSON, and textual values are
 coerced against the tool's schema (for example `"timeoutMs":"5000"` becomes a
 number). An answer without a complete DSML block is passed through as text.
 
+The portal rejects an oversized prompt with a plain-text "Your message is too
+long to be processed" warning instead of a framed answer. The adapter keeps the
+question under `maxQuestionChars` and caps each tool result at
+`maxToolResultChars`, keeping the head and tail with an elision note. If the
+portal still rejects a prompt, the harness sees `CONTEXT_WINDOW_EXCEEDED`; lower
+those two options and retry. A first `find` over a repository can otherwise
+return tens of kilobytes and overflow the portal's limit.
+
 Because the answer has to be buffered to detect the block, text arrives at the
 end of the portal stream instead of token by token.
 
@@ -125,7 +133,8 @@ The plugin reads its config from the bundle patch and/or the profile's
 | `acceptDisclaimer` | `false` | post the GenAI disclaimer acknowledgement automatically instead of asking the operator to accept it; the plugin page's switch writes this option |
 | `contextWindow` | `32000` | declared context so harness compaction runs early |
 | `requestTimeoutMs` | `120000` | full-request deadline |
-| `maxQuestionChars` | `24000` | cap on the flattened transcript |
+| `maxQuestionChars` | `12000` | cap on the flattened transcript; the portal rejects an oversized prompt outright |
+| `maxToolResultChars` | `2000` | cap on one tool result in the transcript; the middle is elided with a note |
 | `quotaCacheMs` | `30000` | how long one quota reading stays fresh |
 | `includeSystemPrompt` | `false` | forward the harness system prompt into `qst` |
 
@@ -258,6 +267,7 @@ pill and the decode-speed figure show.
 | answer missing the `<id>,,,` frame | `MALFORMED_RESPONSE` |
 | deadline exceeded | `TIMEOUT` |
 | caller aborted | `ABORTED` |
+| portal says the message is too long | `CONTEXT_WINDOW_EXCEEDED` |
 | malformed tool-call markup | passed through as text; no failure |
 | network / decode failure | `TRANSPORT` |
 

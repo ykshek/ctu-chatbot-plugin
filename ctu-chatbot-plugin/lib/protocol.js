@@ -47,6 +47,9 @@ const ACTIVE_SESSION = /^\s*It seems you have another active Chatbot session/iu
 /** A plain-text access-denied body returned instead of JSON. */
 const ACCESS_DENIED_TEXT = /^\s*Access\s*denied\b/iu
 
+/** The portal's plain-text length guard; it answers without the `,,,` frame. */
+const MESSAGE_TOO_LONG = /(?:your|the)\s+message\s+is\s+too\s+long|reduce\s+the\s+length\s+of\s+your\s+message/iu
+
 /**
  * The harness version, read from the installation manifest when the process
  * exposes its install directory. Kept local so the bundle imports no DSH
@@ -631,6 +634,13 @@ function unframedFailure(text) {
   }
   if (ACTIVE_SESSION.test(body)) return sessionConflictFailure()
   if (PORTAL_REFUSAL.test(body)) return refusalFailure(body)
+  if (MESSAGE_TOO_LONG.test(body)) {
+    return new CtuPortalError(
+      'The portal rejected the prompt as too long (it answers with a plain-text length warning). '
+      + 'Lower maxQuestionChars or maxToolResultChars and retry.',
+      'CONTEXT_WINDOW_EXCEEDED',
+    )
+  }
   if (ACCESS_DENIED_TEXT.test(body) && body.length < 200) return accessDeniedTextFailure()
   return new CtuPortalError(
     `The portal returned an answer without its conversation-id prefix: ${body.slice(0, 200)}`,

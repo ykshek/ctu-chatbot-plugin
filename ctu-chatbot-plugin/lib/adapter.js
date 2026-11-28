@@ -74,6 +74,24 @@ function contentText(content) {
 }
 
 /**
+ * Keep one tool result or tool-call argument within the prompt budget. The
+ * portal rejects an oversized message outright, and a single `find` result can
+ * be tens of kilobytes; keeping the head and tail preserves both the start of
+ * the output and its final status line.
+ * @param {string} text
+ * @param {number | undefined} max
+ * @returns {string}
+ */
+function truncateToolText(text, max) {
+  if (typeof max !== 'number' || !Number.isInteger(max) || max <= 0 || text.length <= max) return text
+  const tail = Math.min(600, Math.max(0, Math.floor(max / 4)))
+  const head = Math.max(0, max - tail)
+  const omitted = text.length - head - tail
+  if (omitted <= 0) return text
+  return `${text.slice(0, head)}\n…[truncated ${omitted} characters]…\n${text.slice(text.length - tail)}`
+}
+
+/**
  * Render an assistant message that carries tool calls. The portal model must
  * see its earlier call (name and arguments) before the matching tool result, or
  * it cannot tell which result answers which call.
@@ -81,7 +99,7 @@ function contentText(content) {
  * @param {Map<string, string>} toolNames - call id to tool name, filled as calls are seen.
  * @returns {string}
  */
-function renderAssistantWithTools(content, toolNames) {
+function renderAssistantWithTools(content, toolNames, settings) {
   const parts = []
   let text = []
   const flush = () => {
@@ -100,9 +118,10 @@ function renderAssistantWithTools(content, toolNames) {
         const name = typeof block.name === 'string' && block.name !== '' ? block.name : 'unknown'
         const id = typeof block.id === 'string' ? block.id : ''
         if (id !== '') toolNames.set(id, name)
-        const args = typeof block.arguments === 'string' && block.arguments.trim() !== ''
+        const rawArgs = typeof block.arguments === 'string' && block.arguments.trim() !== ''
           ? block.arguments
           : '{}'
+        const args = truncateToolText(rawArgs, (settings.maxToolResultChars ?? 2000) * 2)
         parts.push(`Assistant tool call ${name}${id === '' ? '' : ` (${id})`}:\n${args}`)
         break
       }
@@ -124,19 +143,20 @@ function renderAssistantWithTools(content, toolNames) {
  * Render one harness message for the portal's text-only prompt.
  * @param {{ role?: string, content?: readonly any[], toolCallId?: unknown, isError?: unknown }} message
  * @param {Map<string, string>} toolNames
+ * @param {{ maxToolResultChars?: number }} settings
  * @returns {string}
  */
-function renderMessage(message, toolNames) {
+function renderMessage(message, toolNames, settings) {
   if (message.role === 'tool') {
     const id = typeof message.toolCallId === 'string' ? message.toolCallId : ''
     const name = (id !== '' ? toolNames.get(id) : undefined) ?? 'tool'
-    const text = contentText(message.content).trim()
+    const text = truncateToolText(contentText(message.content).trim(), settings.maxToolResultChars)
     const error = message.isError === true ? ' [error]' : ''
     return `Tool result (${name}${id === '' ? '' : `, ${id}`})${error}:\n${text === '' ? '[no output]' : text}`
   }
   if (message.role === 'assistant' && Array.isArray(message.content)
     && message.content.some(block => block?.type === 'tool-call')) {
-    return renderAssistantWithTools(message.content, toolNames)
+    return renderAssistantWithTools(message.content, toolNames, settings)
   }
   const text = contentText(message.content).trim()
   if (text === '') return ''
@@ -153,7 +173,7 @@ function renderMessage(message, toolNames) {
  * flattened transcript. Tool calls and tool results are rendered with their
  * call ids so the model can correlate them on the next turn.
  * @param {{ messages?: readonly any[], system?: unknown, tools?: readonly any[] }} options
- * @param {{ includeSystemPrompt: boolean, maxQuestionChars: number }} settings
+ * @param {{ includeSystemPrompt: boolean, maxQuestionChars: number, maxToolResultChars?: number }} settings
  * @returns {string}
  */
 export function buildQuestion(options, settings) {
@@ -168,7 +188,7 @@ export function buildQuestion(options, settings) {
   const toolNames = new Map()
   for (const message of options.messages ?? []) {
     if (!settings.includeSystemPrompt && (message.role === 'system' || message.role === 'developer')) continue
-    const rendered = renderMessage(message, toolNames)
+    const rendered = renderMessage(message, toolNames, settings)
     if (rendered !== '') turns.push(rendered)
   }
 
@@ -182,8 +202,14 @@ export function buildQuestion(options, settings) {
   if (budget <= marker.length) {
     return headerText !== '' ? headerText : bodyText.slice(bodyText.length - settings.maxQuestionChars)
   }
-  const kept = bodyText.slice(bodyText.length - (budget - marker.length))
-  return [headerText, `${marker}\n\n${kept}`].filter(Boolean).join('\n\n')
+  // Keep the start of the transcript (the user's task and session context) as
+  // well as the newest tool results; dropping only the middle preserves both
+  // ends of an agent loop.
+  const available = budget - marker.length
+  const headKeep = Math.min(2000, Math.floor(available / 3))
+  const tailKeep = available - headKeep
+  const kept = `${bodyText.slice(0, headKeep)}\n${marker}\n${bodyText.slice(bodyText.length - tailKeep)}`
+  return [headerText, kept].filter(Boolean).join('\n\n')
 }
 
 /**
@@ -210,6 +236,7 @@ function isRedirectFailure(error) {
  * @property {number} contextWindow
  * @property {number} requestTimeoutMs
  * @property {number} maxQuestionChars
+ * @property {number} maxToolResultChars
  * @property {boolean} includeSystemPrompt
  */
 

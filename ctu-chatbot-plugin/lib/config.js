@@ -42,7 +42,10 @@ export const DEFAULT_CONTEXT_WINDOW = 32_000
 export const DEFAULT_REQUEST_TIMEOUT_MS = 120_000
 
 /** Safety cap on the flattened transcript sent as the portal's single `qst` string. */
-export const DEFAULT_MAX_QUESTION_CHARS = 24_000
+export const DEFAULT_MAX_QUESTION_CHARS = 12_000
+
+/** Cap on one tool result rendered into the prompt; the portal rejects oversized messages. */
+export const DEFAULT_MAX_TOOL_RESULT_CHARS = 2_000
 
 /**
  * @typedef {object} CtuOptions
@@ -57,6 +60,7 @@ export const DEFAULT_MAX_QUESTION_CHARS = 24_000
  * @property {number} contextWindow
  * @property {number} requestTimeoutMs
  * @property {number} maxQuestionChars
+ * @property {number} maxToolResultChars
  * @property {number} quotaCacheMs
  * @property {boolean} includeSystemPrompt
  */
@@ -81,6 +85,7 @@ export function resolveOptions(raw) {
     contextWindow: positiveInteger(config.contextWindow) ?? DEFAULT_CONTEXT_WINDOW,
     requestTimeoutMs: positiveInteger(config.requestTimeoutMs) ?? DEFAULT_REQUEST_TIMEOUT_MS,
     maxQuestionChars: positiveInteger(config.maxQuestionChars) ?? DEFAULT_MAX_QUESTION_CHARS,
+    maxToolResultChars: positiveInteger(config.maxToolResultChars) ?? DEFAULT_MAX_TOOL_RESULT_CHARS,
     quotaCacheMs: positiveInteger(config.quotaCacheMs) ?? DEFAULT_QUOTA_CACHE_MS,
     includeSystemPrompt: config.includeSystemPrompt === true,
   })

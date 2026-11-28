@@ -198,6 +198,11 @@ const server = createServer(async (req, res) => {
       res.end(CONFLICT)
       return
     }
+    if (body.model === 'TOOLONG') {
+      res.writeHead(200, { 'content-type': 'text/plain' })
+      res.end('Your message is too long to be processed. Please reduce the length of your message and try again.')
+      return
+    }
     // Default: framed chunked markdown.
     const framed = frame(body.id, ANSWER)
     res.writeHead(200, { 'content-type': 'text/plain' })
@@ -455,6 +460,14 @@ await check('buildQuestion includes the tool catalog and correlates calls with r
   assert.match(question, /Assistant: Let me look\./u)
   assert.match(question, /Assistant tool call bash \(call-1\):\n\{"command":"pwd"\}/u)
   assert.match(question, /Tool result \(bash, call-1\):\n\/tmp\/project/u)
+
+  const capped = buildQuestion({
+    messages: [
+      { role: 'tool', toolCallId: 'call-1', content: [{ type: 'text', text: 'A'.repeat(500) + 'TAIL' }] },
+    ],
+  }, { includeSystemPrompt: false, maxQuestionChars: 24000, maxToolResultChars: 80 })
+  assert.match(capped, /truncated \d+ characters/u)
+  assert.ok(capped.endsWith('TAIL'), 'the end of a tool result survives')
 })
 
 await check('extractToolCalls handles ASCII markers and raw JSON values', () => {
@@ -504,6 +517,14 @@ await check('the one-active-session guard fails INVALID_REQUEST and clears the c
     },
   )
   assert.equal(adapter.claimedSessionId, undefined, 'the next turn reopens the conversation')
+})
+
+await check('the portal\'s length guard fails CONTEXT_WINDOW_EXCEEDED', async () => {
+  const adapter = makeAdapter()
+  await assert.rejects(
+    () => collect(adapter.stream({ provider: 'ctu-portal', model: 'TOOLONG', messages: history })),
+    (error) => failureOf(error).code === 'CONTEXT_WINDOW_EXCEEDED',
+  )
 })
 
 await check('an answer without the conversation-id frame fails MALFORMED_RESPONSE', async () => {
@@ -712,6 +733,7 @@ await check('buildQuestion truncates the transcript but keeps the header', async
   ], tools }, settings)
   assert.ok(question.startsWith('You can use the tools below'), 'tool catalog is kept')
   assert.match(question, /\[earlier conversation truncated\]/u)
+  assert.match(question, /A{100}/u, 'the start of the transcript is kept')
   assert.ok(question.endsWith('B'.repeat(100)), 'latest transcript tail is kept')
   assert.ok(question.length <= settings.maxQuestionChars + 40, 'stays near the configured cap')
 })
