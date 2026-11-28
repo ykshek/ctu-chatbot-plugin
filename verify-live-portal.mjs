@@ -3,9 +3,10 @@
  *
  * Instantiates the REAL `CityuPortalAdapter` and drives its `stream()` method
  * end-to-end against the live portal, using the session cookie from the
- * CITYU_PORTAL_COOKIE environment variable. This confirms the adapter's
- * transport (startNewConversation + chatStream) works from the host process,
- * including the UUID conversation id the portal requires.
+ * CITYU_PORTAL_COOKIE environment variable. This confirms the `chatbot` module
+ * transport (getchathistory session handshake + framed getchatresponse) works
+ * from the host process, and that the answer is not the portal's canned IT
+ * Service Desk fallback (which a non-empty-text check would wrongly accept).
  *
  * Run:  CITYU_PORTAL_COOKIE='<cookie header>' node verify-live-portal.mjs
  *
@@ -53,5 +54,19 @@ console.log('answer length:', answer.length)
 console.log('answer (first 800 chars):')
 console.log(answer.slice(0, 800))
 console.log('')
+
+if (answer.trim() === '') {
+  console.error('FAIL: the portal returned an empty answer')
+  process.exit(1)
+}
+if (/很抱歉[，,]\s*我(?:無法|无法)提供你(?:問題|问题)的答案/iu.test(answer)) {
+  console.error('FAIL: the portal returned its IT Service Desk fallback, not a model answer')
+  process.exit(1)
+}
+if (answer.includes(',,,')) {
+  console.error('FAIL: the conversation-id frame leaked into the answer')
+  process.exit(1)
+}
+
 console.log('ADAPTER LIVE VERIFICATION: SUCCESS')
 process.exit(0)
