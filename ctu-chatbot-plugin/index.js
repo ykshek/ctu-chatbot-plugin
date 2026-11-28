@@ -1,14 +1,14 @@
 /**
  * CityUHK Portal Chatbot — a DeepSeek Harness LLM adapter plugin.
  *
- * The CityUHK IT-portal chatbot (`/portal/category/5`) answers over a
- * proprietary JSON + streamed-markdown protocol, not an OpenAI-compatible one.
+ * The CityUHK GenAI chatbot (`/portal/category/5`) answers over the portal's
+ * proprietary JSON + framed-markdown protocol, not an OpenAI-compatible one.
  * This bundle adapts it to the harness LLM seam as provider `cityu-portal`:
  *
  *   - `apply` registers exactly one provider route with the `llm` service;
  *   - the adapter maps harness messages onto the portal's single `qst` string,
- *     claims the portal's one active conversation, and streams the markdown
- *     answer back as one text block;
+ *     opens the portal's one active conversation, strips the `<id>,,,` answer
+ *     frame, and streams the markdown back as one text block;
  *   - the same adapter reports estimated token usage, so the harness Usage and
  *     speed readings work for a provider that counts nothing;
  *   - failures carry harness failure codes so retry and UI handling behave like
@@ -214,14 +214,11 @@ export class CtuQuotaService extends TypertRemoteService {
   }
 
   /**
-   * Verify the configured cookie without failing the settings page over the
-   * quota endpoint alone.
+   * Verify the configured cookie against the portal's own quota call.
    *
-   * The portal serves quota from its `chatbot` module, which sits behind a
-   * stricter edge filter than the `kbchatbot` module the chat uses. A cookie
-   * that works for chat can therefore be rejected by `getusage`; fall back to
-   * a read-only chat-history probe and report the quota problem as a warning
-   * instead of pretending the whole cookie is unusable.
+   * Chat and quota share the `chatbot` module now, so `getusage` is both the
+   * reachability probe and the quota read; no separate chat-history probe is
+   * needed, and no conversation is opened just to test a cookie.
    * @returns {Promise<object>}
    */
   async probe() {
@@ -230,22 +227,10 @@ export class CtuQuotaService extends TypertRemoteService {
       const quota = await this.adapter.readQuota('LAST')
       return { ok: true, quota, status }
     } catch (error) {
-      const quotaError = error instanceof Error ? error.message : String(error)
-      try {
-        await this.adapter.probeChat()
-        return {
-          ok: true,
-          status,
-          warning: `The cookie is stored and the chatbot is reachable, but the portal's `
-            + `quota endpoint rejected it: ${quotaError}`,
-        }
-      } catch (chatError) {
-        return {
-          ok: false,
-          error: chatError instanceof Error ? chatError.message : String(chatError),
-          quotaError,
-          status,
-        }
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+        status,
       }
     }
   }
