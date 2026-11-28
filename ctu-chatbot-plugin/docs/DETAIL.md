@@ -33,11 +33,14 @@ Assistant: …
 User: What if that fails?
 ```
 
-The portal tracks **one active conversation per signed-in user**. Every request
-first calls `startnewconversation` with the adapter's own conversation id, which
-claims the session. If the portal already holds a session from another browser
-tab, the request fails with a message telling you to close that tab; the plugin
-does not fight the portal for the session.
+The portal tracks **one active conversation per signed-in user**. The adapter
+claims its conversation with `startnewconversation` once, on the first turn,
+then asks every later turn against that same id — the same lifecycle as the
+portal's own widget, which only calls that endpoint from its "clear
+conversation" button. If the portal already holds a session from another
+browser tab, it refuses the claim; the plugin reports that as `INVALID_REQUEST`
+with a message telling you to close the other tab, and does not fight the
+portal for the session.
 
 ## Models
 
@@ -153,6 +156,13 @@ the same request the portal's own dashboard widget makes.
   selection belongs to this provider, so it never claims a quota for a model it
   does not serve.
 
+The settings page verifies a pasted cookie by reading `getusage`. That module
+sits behind a stricter edge filter than the `kbchatbot` module the chat uses, so
+a cookie that works for chat can still be rejected there. When that happens the
+page keeps the cookie and reports the quota problem as a warning, after a
+read-only `getchathistory` probe on the chat module confirms the chatbot is
+reachable.
+
 The portal reports no prompt or completion token counts. To make the harness
 readings work anyway, the adapter emits a `usage` chunk before its terminal
 chunk with a **~4 characters per token estimate** of the flattened question and
@@ -181,9 +191,11 @@ pill and the decode-speed figure show.
 | --- | --- |
 | missing cookie | `MISSING_CREDENTIAL` |
 | HTTP 401/403 | `INVALID_CREDENTIAL` |
+| portal `status: "AccessDenied"` (HTTP 200 JSON) | `INVALID_CREDENTIAL` |
 | HTTP 429 | `RATE_LIMIT` |
 | HTTP 5xx | `SERVER` |
 | session conflict / other 4xx | `INVALID_REQUEST` |
+| portal refused a conversation (HTTP 200 JSON) | `INVALID_REQUEST` |
 | empty answer | `EMPTY_RESPONSE` |
 | deadline exceeded | `TIMEOUT` |
 | caller aborted | `ABORTED` |
