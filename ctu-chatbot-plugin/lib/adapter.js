@@ -148,15 +148,16 @@ function renderAssistantWithTools(content, toolNames, settings) {
  * @param {{ role?: string, content?: readonly any[], toolCallId?: unknown, isError?: unknown }} message
  * @param {Map<string, string>} toolNames
  * @param {{ maxToolResultChars?: number }} settings
+ * @param {number} [maxToolResultChars] - per-result override for a budgeted exchange.
  * @returns {string}
  */
-function renderMessage(message, toolNames, settings) {
+function renderMessage(message, toolNames, settings, maxToolResultChars = settings.maxToolResultChars) {
   if (message.role === 'tool') {
     const id = typeof message.toolCallId === 'string' ? message.toolCallId : ''
     const name = (id !== '' ? toolNames.get(id) : undefined) ?? 'tool'
     const text = truncateToolText(
       contentText(message.content).trim(),
-      settings.maxToolResultChars,
+      maxToolResultChars,
       'use a narrower command or read the file with offset/limit',
     )
     const error = message.isError === true ? ' [error]' : ''
@@ -173,58 +174,239 @@ function renderMessage(message, toolNames, settings) {
 }
 
 /**
+ * One-line action record for a message that is no longer shown in full.
+ * These records preserve the agent's progress (which files it read, which
+ * commands it ran) without spending the transcript budget on old outputs.
+ * @param {{ role?: string, content?: readonly any[], toolCallId?: unknown, isError?: unknown }} message
+ * @param {Map<string, string>} toolNames
+ * @returns {string}
+ */
+function compactMessage(message, toolNames) {
+  const oneLine = (value, max) => {
+    const text = value.replace(/\s+/gu, ' ').trim()
+    if (text === '') return ''
+    return text.length <= max ? text : `${text.slice(0, max - 1).trimEnd()}…`
+  }
+  if (message.role === 'tool') {
+    const id = typeof message.toolCallId === 'string' ? message.toolCallId : ''
+    const name = (id !== '' ? toolNames.get(id) : undefined) ?? 'tool'
+    const text = oneLine(contentText(message.content), 120)
+    const error = message.isError === true ? ' [error]' : ''
+    return `Tool ${name}${error}: ${text === '' ? '[no output]' : text}`
+  }
+  if (message.role === 'assistant') {
+    const parts = []
+    for (const block of message.content ?? []) {
+      if (block?.type === 'text' || block?.type === 'reasoning') {
+        const text = oneLine(typeof block.text === 'string' ? block.text : '', 100)
+        if (text !== '') parts.push(text)
+      } else if (block?.type === 'tool-call') {
+        const name = typeof block.name === 'string' && block.name !== '' ? block.name : 'tool'
+        const args = oneLine(typeof block.arguments === 'string' ? block.arguments : '', 70)
+        parts.push(`${name}(${args})`)
+      }
+    }
+    const text = oneLine(parts.join(' '), 220)
+    return text === '' ? '' : `Assistant: ${text}`
+  }
+  const text = oneLine(contentText(message.content), 120)
+  if (text === '') return ''
+  return `${ROLE_LABELS[message.role] ?? 'User'}: ${text}`
+}
+
+/**
+ * One line naming the available skills, kept instead of the full catalog.
+ * @param {{ source?: { entries?: unknown }, content?: readonly any[] }} message
+ * @returns {string}
+ */
+function skillSummary(message) {
+  const entries = message?.source?.entries
+  if (Array.isArray(entries)) {
+    const names = entries
+      .map(entry => entry !== null && typeof entry === 'object' && typeof entry.name === 'string' ? entry.name : '')
+      .filter(name => name !== '')
+    if (names.length > 0) return `Skills: ${names.join(', ')}`
+  }
+  const text = contentText(message.content).trim().replace(/\s+/gu, ' ')
+  return text === '' ? '' : `Skills: ${text.slice(0, 300)}`
+}
+
+/**
+ * Build the call-id to tool-name map before rendering; an old assistant message
+ * may be compacted away while its tool result is still shown.
+ * @param {readonly any[]} messages
+ * @returns {Map<string, string>}
+ */
+function collectToolNames(messages) {
+  const names = new Map()
+  for (const message of messages) {
+    if (message?.role !== 'assistant' || !Array.isArray(message.content)) continue
+    for (const block of message.content) {
+      if (block?.type === 'tool-call' && typeof block.id === 'string') {
+        names.set(block.id, typeof block.name === 'string' && block.name !== '' ? block.name : 'tool')
+      }
+    }
+  }
+  return names
+}
+
+/**
+ * Index of the last assistant message; the exchange from there to the end is
+ * always kept in full so the model knows what it just asked for.
+ * @param {readonly any[]} messages
+ * @returns {number}
+ */
+function findLatestStart(messages) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index]?.role === 'assistant') return index
+  }
+  return Math.max(0, messages.length - 1)
+}
+
+/**
  * Build the portal's single `qst` string from the harness request.
  *
- * The portal has no native tool field and no conversation memory of its own
- * prompt shape, so the question carries three things, in order: the optional
- * harness system prompt, the tool catalog and DSML call syntax, and the
- * flattened transcript. Tool calls and tool results are rendered with their
- * call ids so the model can correlate them on the next turn.
+ * The portal has a hard prompt-length ceiling, so the transcript is assembled
+ * with an explicit budget:
+ *
+ *   harness system prompt (capped) + tool catalog + task/context
+ *   + compact older actions + the latest assistant/tool exchange (full)
+ *
+ * The latest exchange is allocated a total tool-result budget and every tool
+ * result gets a head/tail excerpt. Older actions become one-line records, so
+ * the model knows what it already read or ran instead of restarting the task.
  * @param {{ messages?: readonly any[], system?: unknown, tools?: readonly any[] }} options
- * @param {{ includeSystemPrompt: boolean, maxQuestionChars: number, maxToolResultChars?: number }} settings
+ * @param {{ includeSystemPrompt: boolean, maxQuestionChars: number, maxToolResultChars?: number, maxToolResultTotalChars?: number, maxSystemPromptChars?: number }} settings
  * @returns {string}
  */
 export function buildQuestion(options, settings) {
+  const allMessages = Array.isArray(options.messages) ? options.messages : []
+  const toolNames = collectToolNames(allMessages)
+  const maxSystem = typeof settings.maxSystemPromptChars === 'number' ? settings.maxSystemPromptChars : 2_500
+
   const header = []
   if (settings.includeSystemPrompt) {
+    const systems = []
     if (typeof options.system === 'string' && options.system.trim() !== '') {
-      header.push(`System: ${options.system.trim()}`)
+      systems.push(`System: ${options.system.trim()}`)
     }
-    for (const message of options.messages ?? []) {
+    for (const message of allMessages) {
       if (message?.role !== 'system' && message?.role !== 'developer') continue
       const text = contentText(message.content).trim()
-      if (text !== '') header.push(`${ROLE_LABELS[message.role]}: ${text}`)
+      if (text !== '') systems.push(`${ROLE_LABELS[message.role]}: ${text}`)
     }
+    let system = systems.join('\n\n')
+    if (maxSystem > 0 && system.length > maxSystem) {
+      system = `${system.slice(0, maxSystem)}\n[system prompt truncated]`
+    }
+    if (system !== '') header.push(system)
   }
   const catalog = formatToolCatalog(options.tools, { descriptions: !settings.includeSystemPrompt })
   if (catalog !== '') header.push(catalog)
-
-  const turns = []
-  const toolNames = new Map()
-  for (const message of options.messages ?? []) {
-    if (message?.role === 'system' || message?.role === 'developer') continue
-    const rendered = renderMessage(message, toolNames, settings)
-    if (rendered !== '') turns.push(rendered)
-  }
-
   const headerText = header.join('\n\n')
-  const bodyText = turns.join('\n\n')
-  if (headerText === '' && bodyText === '') return ''
-  const marker = '[earlier conversation truncated]'
-  const separator = headerText !== '' && bodyText !== '' ? 2 : 0
-  const budget = settings.maxQuestionChars - headerText.length - separator
-  if (bodyText.length <= budget) return [headerText, bodyText].filter(Boolean).join('\n\n')
-  if (budget <= marker.length) {
-    return headerText !== '' ? headerText : bodyText.slice(bodyText.length - settings.maxQuestionChars)
+  const budget = settings.maxQuestionChars - headerText.length - (headerText === '' ? 0 : 2)
+  if (budget <= 0) return headerText.slice(0, settings.maxQuestionChars)
+
+  const messages = allMessages.filter(message => message?.role !== 'system' && message?.role !== 'developer')
+  if (messages.length === 0) return headerText
+
+  const latestStart = findLatestStart(messages)
+  const taskParts = []
+  const runtimeParts = []
+  let skills = ''
+  const older = []
+  for (let index = 0; index < latestStart; index += 1) {
+    const message = messages[index]
+    const kind = message?.source?.kind
+    if (kind === 'time-context') continue
+    if (kind === 'skill-catalog') {
+      skills = skillSummary(message)
+      continue
+    }
+    if (kind === 'runtime-context') {
+      const text = contentText(message.content).trim()
+      if (text !== '') runtimeParts.push(text)
+      continue
+    }
+    if (message.role === 'user' && (kind === 'user' || kind === undefined)) {
+      const text = contentText(message.content).trim()
+      if (text !== '') taskParts.push(text)
+      continue
+    }
+    older.push(message)
   }
-  // Keep the start of the transcript (the user's task and session context) as
-  // well as the newest tool results; dropping only the middle preserves both
-  // ends of an agent loop.
-  const available = budget - marker.length
-  const headKeep = Math.min(2000, Math.floor(available / 3))
-  const tailKeep = available - headKeep
-  const kept = `${bodyText.slice(0, headKeep)}\n${marker}\n${bodyText.slice(bodyText.length - tailKeep)}`
-  return [headerText, kept].filter(Boolean).join('\n\n')
+
+  let pinned = ''
+  const taskText = taskParts.join('\n\n')
+  if (taskText !== '') {
+    pinned += `User: ${truncateToolText(taskText, Math.min(2_500, Math.max(500, Math.floor(budget / 3))), 'task truncated')}\n\n`
+  }
+  const runtimeText = runtimeParts.join('\n\n')
+  if (runtimeText !== '') {
+    pinned += `Context:\n${truncateToolText(runtimeText, Math.min(1_500, Math.max(300, Math.floor(budget / 4))), 'context truncated')}\n\n`
+  }
+  if (skills !== '' && pinned.length + skills.length + 2 < budget * 0.5) {
+    pinned += `${skills}\n\n`
+  }
+  pinned = pinned.trim()
+
+  const latest = messages.slice(latestStart)
+  const latestNonTool = []
+  const latestTools = []
+  for (const message of latest) {
+    if (message.role === 'tool') {
+      latestTools.push(message)
+      continue
+    }
+    const rendered = renderMessage(message, toolNames, settings)
+    if (rendered !== '') latestNonTool.push(rendered)
+  }
+
+  const marker = '[earlier conversation compacted]'
+  const pinnedLength = pinned === '' ? 0 : pinned.length + 2
+  const nonToolText = latestNonTool.join('\n\n')
+  const nonToolLength = nonToolText === '' ? 0 : nonToolText.length + 2
+  const reserveOlder = older.length === 0 ? 0 : Math.min(1_200, Math.floor(budget / 5))
+  const toolBudget = Math.max(0, budget - pinnedLength - nonToolLength - reserveOlder - (older.length === 0 ? 0 : marker.length + 2))
+  const perTool = latestTools.length === 0
+    ? 0
+    : Math.max(80, Math.min(
+      typeof settings.maxToolResultChars === 'number' ? settings.maxToolResultChars : 2_000,
+      Math.floor(toolBudget / latestTools.length),
+    ))
+
+  const latestParts = []
+  for (const message of latest) {
+    const rendered = message.role === 'tool'
+      ? renderMessage(message, toolNames, settings, perTool)
+      : renderMessage(message, toolNames, settings)
+    if (rendered !== '') latestParts.push(rendered)
+  }
+
+  const latestText = latestParts.join('\n\n')
+  const used = pinnedLength + (latestText === '' ? 0 : latestText.length + 2)
+  const remaining = Math.max(0, budget - used - (older.length === 0 ? 0 : marker.length + 2))
+  const compact = []
+  let compactLength = 0
+  for (let index = older.length - 1; index >= 0; index -= 1) {
+    const line = compactMessage(older[index], toolNames)
+    if (line === '') continue
+    if (compactLength + line.length + 1 > remaining) break
+    compact.unshift(line)
+    compactLength += line.length + 1
+  }
+
+  const body = []
+  if (pinned !== '') body.push(pinned)
+  if (older.length > 0) {
+    body.push(compact.length === 0 ? marker : `${marker}\n${compact.join('\n')}`)
+  }
+  if (latestText !== '') body.push(latestText)
+  const bodyText = body.join('\n\n')
+  const assembled = [headerText, bodyText].filter(Boolean).join('\n\n')
+  return assembled.length <= settings.maxQuestionChars
+    ? assembled
+    : assembled.slice(0, settings.maxQuestionChars)
 }
 
 /**
@@ -302,6 +484,8 @@ function isRedirectFailure(error) {
  * @property {number} requestTimeoutMs
  * @property {number} maxQuestionChars
  * @property {number} maxToolResultChars
+ * @property {number} maxToolResultTotalChars
+ * @property {number} maxSystemPromptChars
  * @property {boolean} includeSystemPrompt
  */
 

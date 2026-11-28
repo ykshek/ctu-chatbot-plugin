@@ -71,10 +71,16 @@ after which the history is read once more.
 ## Agent runtime
 
 A normal agent turn carries, in order: the harness system prompt (when
-`includeSystemPrompt` is on), the tool catalog and DSML syntax, and the flattened
-transcript. The adapter streams text as it arrives and holds back only a suffix
-that could become the tool marker; once the marker is seen, the tool block is
-parsed and emitted as harness `tool-call` blocks with `finish: tool-calls`.
+`includeSystemPrompt` is on, capped by `maxSystemPromptChars`), the tool catalog
+and DSML syntax, the task and runtime context, one-line records of earlier
+actions, and the **latest assistant/tool exchange in full**. Earlier tool
+results are compressed to action records so the model remembers which files it
+read and which commands it ran instead of restarting the exploration. The latest
+exchange gets a total tool-result budget (`maxToolResultTotalChars`), divided
+across its results with per-result caps. The adapter streams text as it arrives
+and holds back only a suffix that could become the tool marker; once the marker
+is seen, the tool block is parsed and emitted as harness `tool-call` blocks with
+`finish: tool-calls`.
 
 Two auxiliary requests are handled **locally** so they never touch the agent's
 only portal conversation:
@@ -122,11 +128,12 @@ number). An answer without a complete DSML block is passed through as text.
 
 The portal rejects an oversized prompt with a plain-text "Your message is too
 long to be processed" warning instead of a framed answer. The adapter keeps the
-question under `maxQuestionChars` and caps each tool result at
-`maxToolResultChars`, keeping the head and tail with an elision note. If the
+question under `maxQuestionChars`, caps each tool result at
+`maxToolResultChars`, and caps all tool results in one turn at
+`maxToolResultTotalChars`, keeping the head and tail with an elision note. If the
 portal still rejects a prompt, the harness sees `CONTEXT_WINDOW_EXCEEDED`; lower
-those two options and retry. A first `find` over a repository can otherwise
-return tens of kilobytes and overflow the portal's limit.
+those options and retry. A first `find` over a repository can otherwise return
+tens of kilobytes and overflow the portal's limit.
 
 Text before a tool block is streamed as it arrives; the tool block itself is
 parsed when the portal finishes, so the tool cards appear at the end of the
@@ -172,7 +179,9 @@ The plugin reads its config from the bundle patch and/or the profile's
 | `contextWindow` | `4000` | declared context so harness compaction runs before the portal's prompt limit |
 | `requestTimeoutMs` | `120000` | full-request deadline |
 | `maxQuestionChars` | `12000` | cap on the flattened transcript; the portal rejects an oversized prompt outright |
-| `maxToolResultChars` | `2000` | cap on one tool result in the transcript; the middle is elided with a note |
+| `maxToolResultChars` | `2000` | cap on one tool result; the middle is elided with a note |
+| `maxToolResultTotalChars` | `3500` | total tool-result budget in one request; divided across the latest results |
+| `maxSystemPromptChars` | `2500` | cap on the forwarded harness system prompt; the full prompt is ~6k |
 | `quotaCacheMs` | `30000` | how long one quota reading stays fresh |
 | `includeSystemPrompt` | `true` | forward the harness system prompt into `qst`; catalog descriptions are omitted when it is on |
 

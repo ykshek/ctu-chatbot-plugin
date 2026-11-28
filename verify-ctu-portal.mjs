@@ -757,24 +757,46 @@ await check('caller abort fails ABORTED', async () => {
   )
 })
 
-await check('buildQuestion truncates the transcript but keeps the header', async () => {
+await check('buildQuestion compacts older actions and keeps the latest exchange', async () => {
   const tools = [{
     name: 'bash',
     description: 'Run a shell command.',
     parameters: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'] },
   }]
-  const settings = { includeSystemPrompt: false, maxQuestionChars: 1200 }
-  const question = buildQuestion({ messages: [
-    { role: 'user', content: [{ type: 'text', text: 'A'.repeat(2000) }] },
-    { role: 'user', content: [{ type: 'text', text: 'B'.repeat(2000) }] },
-  ], tools }, settings)
+  const messages = [
+    { role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: 'Audit this project.' }] },
+    { role: 'assistant', content: [{ type: 'tool-call', id: 'c1', name: 'bash', arguments: '{"command":"ls"}' }] },
+    { role: 'tool', toolCallId: 'c1', content: [{ type: 'text', text: 'A'.repeat(2000) }] },
+    { role: 'assistant', content: [{ type: 'tool-call', id: 'c2', name: 'bash', arguments: '{"command":"pwd"}' }] },
+    { role: 'tool', toolCallId: 'c2', content: [{ type: 'text', text: 'B'.repeat(2000) }] },
+  ]
+  const settings = {
+    includeSystemPrompt: false,
+    maxQuestionChars: 4000,
+    maxToolResultChars: 2000,
+    maxToolResultTotalChars: 600,
+  }
+  const question = buildQuestion({ messages, tools }, settings)
+  assert.ok(question.length <= settings.maxQuestionChars, 'stays within the prompt cap')
   assert.ok(question.startsWith('You can use the tools below'), 'tool catalog is kept')
-  assert.match(question, /\[earlier conversation truncated\]/u)
-  assert.match(question, /A{100}/u, 'the start of the transcript is kept')
-  assert.ok(question.endsWith('B'.repeat(100)), 'latest transcript tail is kept')
-  assert.ok(question.length <= settings.maxQuestionChars + 40, 'stays near the configured cap')
+  assert.match(question, /\[earlier conversation compacted\]/u)
+  assert.match(question, /Audit this project/u, 'the task is kept')
+  assert.match(question, /Assistant tool call bash \(c2\)/u, 'the latest call is kept')
+  assert.match(question, /Tool result \(bash, c2\)/u, 'the latest result is kept')
+  assert.match(question, /B{100}/u, 'the latest result has its head')
 })
 
+await check('caps the forwarded system prompt', async () => {
+  const question = buildQuestion({
+    messages: [
+      { role: 'system', content: [{ type: 'text', text: 'S'.repeat(5000) + 'TAIL-MARKER' }] },
+      { role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: 'Audit.' }] },
+    ],
+  }, { includeSystemPrompt: true, maxQuestionChars: 12000, maxSystemPromptChars: 200 })
+  assert.match(question, /^System: S{100}/u)
+  assert.match(question, /\[system prompt truncated\]/u)
+  assert.ok(!question.includes('TAIL-MARKER'), 'the tail beyond the cap is omitted')
+})
 
 await check('synthesizes session titles without touching the portal', async () => {
   seen.length = 0
