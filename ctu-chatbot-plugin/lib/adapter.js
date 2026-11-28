@@ -8,9 +8,11 @@
  * The portal is a GenAI chat endpoint, not a chat-completions model:
  *   - every call sends one flattened `qst` string; the portal also keeps its
  *     own server-side transcript for the active conversation,
- *   - there are no tools, images, reasoning channels, or usage counters,
- *   - the answer is markdown framed as `<conversation-id>,,,<markdown>` and is
- *     mapped to one text block.
+ *   - it has no native tool channel, so the tool catalog and DSML call syntax
+ *     travel inside `qst`, and a DSML answer is translated into harness
+ *     `tool-call` blocks,
+ *   - there are no images, reasoning channels, or usage counters,
+ *   - the answer is markdown framed as `<conversation-id>,,,<markdown>`.
  *
  * The portal's page opens a conversation with `getchathistory` and only then
  * asks questions. This adapter mirrors that lifecycle: the first turn claims
@@ -23,6 +25,7 @@ import { CtuPortalError } from './errors.js'
 import { estimateTokens } from './estimate.js'
 import { findModel, MODELS, wireModel } from './models.js'
 import { chatStream, normalizeCookie, openConversation } from './protocol.js'
+import { coerceArguments, extractToolCalls, formatToolCatalog } from './dsml.js'
 import { fetchAllQuotas, fetchQuota } from './quota.js'
 
 /** Role labels used when flattening the message history into one question. */
@@ -35,8 +38,10 @@ const ROLE_LABELS = Object.freeze({
 })
 
 /**
- * Project one content block to the plain text the portal can read.
- * @param {{ type?: string, text?: unknown, name?: unknown }} block
+ * Project one non-tool content block to the plain text the portal can read.
+ * Tool calls are rendered by {@link renderMessage}, where their id and
+ * arguments can be correlated with the tool result.
+ * @param {{ type?: string, text?: unknown }} block
  * @returns {string}
  */
 function blockText(block) {
@@ -44,10 +49,6 @@ function blockText(block) {
     case 'text':
     case 'reasoning':
       return typeof block.text === 'string' ? block.text : ''
-    case 'tool-call':
-      return typeof block.name === 'string' && block.name !== ''
-        ? `[tool call: ${block.name}]`
-        : '[tool call]'
     case 'image':
       return '[image]'
     case 'file':
@@ -73,31 +74,116 @@ function contentText(content) {
 }
 
 /**
+ * Render an assistant message that carries tool calls. The portal model must
+ * see its earlier call (name and arguments) before the matching tool result, or
+ * it cannot tell which result answers which call.
+ * @param {readonly { type?: string, text?: unknown, id?: unknown, name?: unknown, arguments?: unknown }[]} content
+ * @param {Map<string, string>} toolNames - call id to tool name, filled as calls are seen.
+ * @returns {string}
+ */
+function renderAssistantWithTools(content, toolNames) {
+  const parts = []
+  let text = []
+  const flush = () => {
+    const joined = text.join('').trim()
+    if (joined !== '') parts.push(`Assistant: ${joined}`)
+    text = []
+  }
+  for (const block of content) {
+    switch (block?.type) {
+      case 'text':
+      case 'reasoning':
+        if (typeof block.text === 'string') text.push(block.text)
+        break
+      case 'tool-call': {
+        flush()
+        const name = typeof block.name === 'string' && block.name !== '' ? block.name : 'unknown'
+        const id = typeof block.id === 'string' ? block.id : ''
+        if (id !== '') toolNames.set(id, name)
+        const args = typeof block.arguments === 'string' && block.arguments.trim() !== ''
+          ? block.arguments
+          : '{}'
+        parts.push(`Assistant tool call ${name}${id === '' ? '' : ` (${id})`}:\n${args}`)
+        break
+      }
+      case 'image':
+        text.push('[image]')
+        break
+      case 'file':
+        text.push('[file]')
+        break
+      default:
+        break
+    }
+  }
+  flush()
+  return parts.join('\n\n')
+}
+
+/**
+ * Render one harness message for the portal's text-only prompt.
+ * @param {{ role?: string, content?: readonly any[], toolCallId?: unknown, isError?: unknown }} message
+ * @param {Map<string, string>} toolNames
+ * @returns {string}
+ */
+function renderMessage(message, toolNames) {
+  if (message.role === 'tool') {
+    const id = typeof message.toolCallId === 'string' ? message.toolCallId : ''
+    const name = (id !== '' ? toolNames.get(id) : undefined) ?? 'tool'
+    const text = contentText(message.content).trim()
+    const error = message.isError === true ? ' [error]' : ''
+    return `Tool result (${name}${id === '' ? '' : `, ${id}`})${error}:\n${text === '' ? '[no output]' : text}`
+  }
+  if (message.role === 'assistant' && Array.isArray(message.content)
+    && message.content.some(block => block?.type === 'tool-call')) {
+    return renderAssistantWithTools(message.content, toolNames)
+  }
+  const text = contentText(message.content).trim()
+  if (text === '') return ''
+  const label = ROLE_LABELS[message.role] ?? 'User'
+  return `${label}: ${text}`
+}
+
+/**
  * Build the portal's single `qst` string from the harness request.
  *
- * The portal has no conversation memory: a follow-up such as "double that
- * number" is answered from the knowledge base alone. Replaying the transcript
- * inside the one question is what makes multi-turn references resolvable.
- * @param {{ messages?: readonly { role?: string, content?: readonly { type?: string }[] }[], system?: unknown }} options
+ * The portal has no native tool field and no conversation memory of its own
+ * prompt shape, so the question carries three things, in order: the optional
+ * harness system prompt, the tool catalog and DSML call syntax, and the
+ * flattened transcript. Tool calls and tool results are rendered with their
+ * call ids so the model can correlate them on the next turn.
+ * @param {{ messages?: readonly any[], system?: unknown, tools?: readonly any[] }} options
  * @param {{ includeSystemPrompt: boolean, maxQuestionChars: number }} settings
  * @returns {string}
  */
 export function buildQuestion(options, settings) {
-  const turns = []
+  const header = []
   if (settings.includeSystemPrompt && typeof options.system === 'string' && options.system.trim() !== '') {
-    turns.push(`System: ${options.system.trim()}`)
+    header.push(`System: ${options.system.trim()}`)
   }
+  const catalog = formatToolCatalog(options.tools)
+  if (catalog !== '') header.push(catalog)
+
+  const turns = []
+  const toolNames = new Map()
   for (const message of options.messages ?? []) {
-    const text = contentText(message.content).trim()
-    if (text === '') continue
     if (!settings.includeSystemPrompt && (message.role === 'system' || message.role === 'developer')) continue
-    const label = ROLE_LABELS[message.role] ?? 'User'
-    turns.push(`${label}: ${text}`)
+    const rendered = renderMessage(message, toolNames)
+    if (rendered !== '') turns.push(rendered)
   }
-  if (turns.length === 0) return ''
-  const question = turns.join('\n\n')
-  if (question.length <= settings.maxQuestionChars) return question
-  return `[earlier conversation truncated]\n\n${question.slice(question.length - settings.maxQuestionChars)}`
+
+  const headerText = header.join('\n\n')
+  const bodyText = turns.join('\n\n')
+  if (headerText === '' && bodyText === '') return ''
+  const marker = '[earlier conversation truncated]'
+  const separator = headerText !== '' && bodyText !== '' ? 2 : 0
+  const budget = settings.maxQuestionChars - headerText.length - separator
+  if (bodyText.length <= budget) return [headerText, bodyText].filter(Boolean).join('\n\n')
+  if (budget <= marker.length) {
+    return headerText !== '' ? headerText : bodyText.slice(bodyText.length - settings.maxQuestionChars)
+  }
+  const kept = bodyText.slice(bodyText.length - (budget - marker.length))
+  return [headerText, `${marker}\n\n${kept}`].filter(Boolean).join('\n\n')
 }
 
 /**
@@ -258,8 +344,7 @@ export class CtuPortalAdapter {
         this.claimedModel = model
       }
 
-      const chunks = []
-      yield { type: 'block-start', index: 0, blockType: 'text' }
+      const answerParts = []
       for await (const delta of chatStream({
         baseURL: this.options.baseURL,
         cookie,
@@ -270,17 +355,54 @@ export class CtuPortalAdapter {
         sessionOnly,
         signal,
       })) {
-        chunks.push(delta)
-        yield { type: 'text-delta', index: 0, text: delta }
+        answerParts.push(delta)
       }
-      const answer = chunks.join('')
+      const answer = answerParts.join('')
       if (answer.trim() === '') {
         throw new CtuPortalError(
           'The portal returned an empty answer',
           'EMPTY_RESPONSE',
         )
       }
-      yield { type: 'block-end', index: 0, block: { type: 'text', text: answer } }
+
+      // The portal has no native tool channel: a DeepSeek-backed answer may
+      // contain DSML markup. Buffer the answer, strip the markup, and emit a
+      // text block plus one tool-call block per invoke. A `tool-calls` finish
+      // makes the harness execute them and call this provider again with the
+      // results.
+      const parsed = extractToolCalls(answer)
+      const toolByName = new Map()
+      for (const tool of options.tools ?? []) {
+        if (tool !== null && typeof tool === 'object' && typeof tool.name === 'string') {
+          toolByName.set(tool.name, tool)
+        }
+      }
+
+      let index = 0
+      // A plain answer is passed through exactly; only the DSML preamble is
+      // trimmed by the parser. Check emptiness separately so trailing
+      // whitespace survives.
+      const text = parsed.text
+      if (text.trim() !== '') {
+        yield { type: 'block-start', index, blockType: 'text' }
+        yield { type: 'text-delta', index, text }
+        yield { type: 'block-end', index, block: { type: 'text', text } }
+        index += 1
+      }
+      for (const call of parsed.calls) {
+        coerceArguments(call.arguments, toolByName.get(call.name))
+        const id = `call-${randomUUID()}`
+        const args = JSON.stringify(call.arguments)
+        yield { type: 'block-start', index, blockType: 'tool-call' }
+        yield { type: 'tool-call-delta', index, id, name: call.name, argumentsDelta: args }
+        yield {
+          type: 'block-end',
+          index,
+          block: { type: 'tool-call', id, name: call.name, arguments: args },
+        }
+        index += 1
+      }
+
       // The portal reports no prompt or completion counts, so the harness would
       // leave the Usage pill empty and the decode-speed figure blank. Emitting
       // an estimate before the terminal chunk fills both; it is labelled as an
@@ -291,7 +413,10 @@ export class CtuPortalAdapter {
         type: 'usage',
         usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens },
       }
-      yield { type: 'finish', reason: { kind: 'stop' } }
+      yield {
+        type: 'finish',
+        reason: { kind: parsed.calls.length > 0 ? 'tool-calls' : 'stop' },
+      }
     } catch (error) {
       if (error instanceof CtuPortalError) {
         // The portal's one-active-session guard means the next attempt must

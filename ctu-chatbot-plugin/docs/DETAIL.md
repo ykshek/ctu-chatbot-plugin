@@ -20,6 +20,7 @@ chat page speaks the portal's own `chatbot`-module protocol:
 | Disclaimer | `POST {base}/agreeandproceed` (or `createnewuser` for a first-time account) |
 | Request body | one plain-text question (`qst`), **not** a `messages` array |
 | Response | `<conversation-id>,,,` followed by markdown, streamed as `text/plain` (gzip), no usage counters |
+| Tool calls | no native channel: a compact catalog and the DSML call syntax travel in `qst`; DSML in the answer is parsed into harness tool-call blocks |
 | Auth | the portal's browser session cookie, not an API key |
 | State | the portal keeps the active conversation's transcript; the adapter still sends the harness history so tool-loop context is not lost |
 
@@ -63,6 +64,34 @@ writes the `acceptDisclaimer` option below. Saving it restarts the provider so
 the adapter reads the new value; a headless profile sets the option in
 configuration instead. `newUser` is handled the same way with `createnewuser`,
 after which the history is read once more.
+
+## Tool use
+
+The portal has no native tool field, so the adapter carries the harness tool
+declarations in the one `qst` string:
+
+- a compact catalog lists every active tool as `name(required*:type, ...)` plus
+  a one-line description;
+- the same header shows the DSML call syntax the model should emit;
+- when the answer contains a `<｜DSML｜tool_calls>` block, the adapter splits the
+  fixed text from the calls, emits one `tool-call` block per `<invoke>`, and
+  finishes with `tool-calls` so the harness executes them;
+- the next request renders the assistant's calls and the matching tool results
+  back into `qst`, with the call id on both sides so the model can correlate
+  them.
+
+Arguments marked `string="false"` are parsed as JSON, and textual values are
+coerced against the tool's schema (for example `"timeoutMs":"5000"` becomes a
+number). An answer without a complete DSML block is passed through as text.
+
+Because the answer has to be buffered to detect the block, text arrives at the
+end of the portal stream instead of token by token.
+
+`includeSystemPrompt` is still `false` by default: the tool catalog carries the
+call syntax, while the harness system prompt is mostly behavioural guidance.
+Enable it for agent work if you want the full harness prompt (working
+directory, file policy, tool conventions) in every request; it costs quota on
+each turn.
 
 ## Models
 
@@ -195,10 +224,11 @@ pill and the decode-speed figure show.
 
 - **Text only.** Images and files are projected to placeholder text by the
   harness before they reach the adapter; the portal cannot read them.
-- **No tool calling.** The portal does not execute tools. When the harness
-  system prompt asks the model to use them, the portal may echo DSH's DSML
-  tool-call syntax as text; the adapter maps that to one text block, so no tool
-  is executed and the turn ends with `finish: stop`.
+- **Tool calls are emulated through text.** The portal does not execute tools;
+  the adapter parses the model's DSML markup and hands the calls to the harness.
+  A malformed or fenced block falls back to a text answer, and the model must
+  follow the catalog's calling convention. The adapter buffers the answer to
+  parse it, so text is not streamed live.
 - **No reported usage.** The portal counts nothing, so the adapter emits an
   estimated `usage` chunk (see above) and the harness readings are estimates.
 - **No reasoning channel.** The portal streams only visible markdown.
@@ -228,6 +258,7 @@ pill and the decode-speed figure show.
 | answer missing the `<id>,,,` frame | `MALFORMED_RESPONSE` |
 | deadline exceeded | `TIMEOUT` |
 | caller aborted | `ABORTED` |
+| malformed tool-call markup | passed through as text; no failure |
 | network / decode failure | `TRANSPORT` |
 
 ## Files

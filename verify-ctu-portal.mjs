@@ -14,6 +14,7 @@ import { createServer } from 'node:http'
 import { gzipSync } from 'node:zlib'
 import { strict as assert } from 'node:assert'
 import { buildQuestion, CtuPortalAdapter } from './ctu-chatbot-plugin/lib/adapter.js'
+import { coerceArguments, extractToolCalls } from './ctu-chatbot-plugin/lib/dsml.js'
 import { resolveOptions } from './ctu-chatbot-plugin/lib/config.js'
 
 const LLM = 'file:///var/home/linuxbrew/.linuxbrew/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-llm/lib/index.js'
@@ -172,6 +173,24 @@ const server = createServer(async (req, res) => {
     if (body.model === 'REFUSALFRAMED') {
       res.writeHead(200, { 'content-type': 'text/plain' })
       res.end(frame(body.id, REFUSAL))
+      return
+    }
+    if (body.model === 'TOOLS') {
+      const answer = [
+        "I'll inspect the project.\n\n",
+        '<｜DSML｜tool_calls>\n',
+        '<｜DSML｜invoke name="bash">\n',
+        '<｜DSML｜parameter name="description" string="true">List files</｜DSML｜parameter>\n',
+        '<｜DSML｜parameter name="command" string="true">pwd && ls -la</｜DSML｜parameter>\n',
+        '</｜DSML｜invoke>\n',
+        '<｜DSML｜invoke name="read">\n',
+        '<｜DSML｜parameter name="file_path" string="true">/tmp/example.txt</｜DSML｜parameter>\n',
+        '<｜DSML｜parameter name="offset" string="false">3</｜DSML｜parameter>\n',
+        '</｜DSML｜invoke>\n',
+        '</｜DSML｜tool_calls>',
+      ].join('')
+      res.writeHead(200, { 'content-type': 'text/plain' })
+      res.end(frame(body.id, answer))
       return
     }
     if (body.model === 'CONFLICT') {
@@ -380,6 +399,76 @@ await check('handles a conversation-id frame split across chunks', async () => {
   const chunks = await collect(adapter.stream({ provider: 'ctu-portal', model: 'SPLITPREFIX', messages: history }))
   const end = chunks.find(c => c.type === 'block-end')
   assert.equal(end.block.text, ANSWER)
+})
+
+await check('parses DSML tool calls into harness blocks and finishes with tool-calls', async () => {
+  const adapter = makeAdapter()
+  const tools = [
+    {
+      name: 'bash',
+      description: 'Run a shell command.',
+      parameters: { type: 'object', properties: { command: { type: 'string' }, description: { type: 'string' } }, required: ['command'] },
+    },
+    {
+      name: 'read',
+      description: 'Read a file.',
+      parameters: { type: 'object', properties: { file_path: { type: 'string' }, offset: { type: 'number' } }, required: ['file_path'] },
+    },
+  ]
+  const chunks = await collect(adapter.stream({ provider: 'ctu-portal', model: 'TOOLS', messages: history, tools }))
+  const textEnd = chunks.find(c => c.type === 'block-end' && c.block.type === 'text')
+  assert.equal(textEnd.block.text, "I'll inspect the project.")
+  const calls = chunks.filter(c => c.type === 'block-end' && c.block.type === 'tool-call').map(c => c.block)
+  assert.equal(calls.length, 2)
+  assert.equal(calls[0].name, 'bash')
+  assert.deepEqual(JSON.parse(calls[0].arguments), { description: 'List files', command: 'pwd && ls -la' })
+  assert.equal(calls[1].name, 'read')
+  assert.deepEqual(JSON.parse(calls[1].arguments), { file_path: '/tmp/example.txt', offset: 3 })
+  assert.deepEqual(chunks.at(-1), { type: 'finish', reason: { kind: 'tool-calls' } })
+  const assembler = new BlockAssembler()
+  for (const chunk of chunks) assembler.push(chunk)
+  const message = assembler.message({ provider: 'ctu-portal', model: 'cityu-gpt5' })
+  assert.equal(message.content[0].type, 'text')
+  assert.equal(message.content[1].type, 'tool-call')
+  assert.equal(message.content[2].type, 'tool-call')
+  assert.equal(assembler.finish.kind, 'tool-calls')
+})
+
+await check('buildQuestion includes the tool catalog and correlates calls with results', async () => {
+  const question = buildQuestion({
+    messages: [
+      { role: 'user', content: [{ type: 'text', text: 'Audit this project.' }] },
+      { role: 'assistant', content: [
+        { type: 'text', text: 'Let me look.' },
+        { type: 'tool-call', id: 'call-1', name: 'bash', arguments: '{"command":"pwd"}' },
+      ] },
+      { role: 'tool', toolCallId: 'call-1', content: [{ type: 'text', text: '/tmp/project' }] },
+    ],
+    tools: [{
+      name: 'bash',
+      description: 'Run a shell command.',
+      parameters: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'] },
+    }],
+  }, { includeSystemPrompt: false, maxQuestionChars: 24000 })
+  assert.match(question, /^You can use the tools below/u)
+  assert.match(question, /- bash\(command\*:string\): Run a shell command\./u)
+  assert.match(question, /Assistant: Let me look\./u)
+  assert.match(question, /Assistant tool call bash \(call-1\):\n\{"command":"pwd"\}/u)
+  assert.match(question, /Tool result \(bash, call-1\):\n\/tmp\/project/u)
+})
+
+await check('extractToolCalls handles ASCII markers and raw JSON values', () => {
+  const parsed = extractToolCalls('Checking.\n<|DSML|tool_calls><|DSML|invoke name="grep"><|DSML|parameter name="pattern" string="true">foo</|DSML|parameter><|DSML|parameter name="include" string="false">null</|DSML|parameter></|DSML|invoke></|DSML|tool_calls>')
+  assert.equal(parsed.text, 'Checking.')
+  assert.deepEqual(parsed.calls, [{ name: 'grep', arguments: { pattern: 'foo', include: null } }])
+  assert.deepEqual(extractToolCalls('no calls here'), { text: 'no calls here', calls: [] })
+})
+
+await check('coerceArguments follows the tool schema', () => {
+  const args = coerceArguments({ timeoutMs: '5000', command: '123' }, {
+    parameters: { properties: { timeoutMs: { type: 'number' }, command: { type: 'string' } } },
+  })
+  assert.deepEqual(args, { timeoutMs: 5000, command: '123' })
 })
 
 await check('a plain-text portal refusal fails CONTENT_REFUSED', async () => {
@@ -610,15 +699,21 @@ await check('caller abort fails ABORTED', async () => {
   )
 })
 
-await check('buildQuestion can truncate from the front', async () => {
-  const settings = { includeSystemPrompt: false, maxQuestionChars: 40 }
+await check('buildQuestion truncates the transcript but keeps the header', async () => {
+  const tools = [{
+    name: 'bash',
+    description: 'Run a shell command.',
+    parameters: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'] },
+  }]
+  const settings = { includeSystemPrompt: false, maxQuestionChars: 1200 }
   const question = buildQuestion({ messages: [
-    { role: 'user', content: [{ type: 'text', text: 'A'.repeat(50) }] },
-    { role: 'user', content: [{ type: 'text', text: 'B'.repeat(50) }] },
-  ] }, settings)
-  assert.equal(question.length, 74)
-  assert.ok(question.endsWith('B'.repeat(40)))
-  assert.match(question, /^\[earlier conversation truncated\]/u)
+    { role: 'user', content: [{ type: 'text', text: 'A'.repeat(2000) }] },
+    { role: 'user', content: [{ type: 'text', text: 'B'.repeat(2000) }] },
+  ], tools }, settings)
+  assert.ok(question.startsWith('You can use the tools below'), 'tool catalog is kept')
+  assert.match(question, /\[earlier conversation truncated\]/u)
+  assert.ok(question.endsWith('B'.repeat(100)), 'latest transcript tail is kept')
+  assert.ok(question.length <= settings.maxQuestionChars + 40, 'stays near the configured cap')
 })
 
 server.close()
