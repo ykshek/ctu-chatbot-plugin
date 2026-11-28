@@ -80,7 +80,7 @@ const server = createServer(async (req, res) => {
       res.end(JSON.stringify({ status: 'fail', errorMsg: 'It seems you have another active Chatbot session. Please close all other sessions.' }))
       return
     }
-    if (body.model === 'DISCLAIMER' && !agreed.has(body.id)) {
+    if (body.model === 'DISCLAIMER') {
       res.writeHead(200, { 'content-type': 'application/json' })
       res.end(JSON.stringify({ status: 'showdisclaimer' }))
       return
@@ -428,7 +428,7 @@ await check('an answer without the conversation-id frame fails MALFORMED_RESPONS
 await check('catalog exposes every model with text-only input', async () => {
   const adapter = makeAdapter()
   const models = await adapter.listModels('ctu-portal')
-  assert.equal(models.length, 5)
+  assert.equal(models.length, 4)
   for (const model of models) {
     assert.equal(model.provider, 'ctu-portal')
     assert.deepEqual(model.inputModalities, ['text'])
@@ -480,9 +480,11 @@ await check('acceptDisclaimer acknowledges and opens the conversation', async ()
   const adapter = makeAdapter({ acceptDisclaimer: true })
   const chunks = await collect(adapter.stream({ provider: 'ctu-portal', model: 'DISCLAIMER', messages: history }))
   assert.equal(chunks.find(c => c.type === 'block-end').block.text, ANSWER)
+  // The portal keeps answering `showdisclaimer` on getchathistory even after
+  // the acknowledgement; the page does not re-read history, and neither do we.
   assert.deepEqual(
     seen.map(entry => entry.path.split('/').at(-1)),
-    ['getchathistory', 'agreeandproceed', 'getchathistory', 'getchatresponse'],
+    ['getchathistory', 'agreeandproceed', 'getchatresponse'],
   )
 })
 

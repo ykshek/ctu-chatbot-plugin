@@ -15,19 +15,12 @@
 import { MODELS } from './models.js'
 import { getUsage } from './protocol.js'
 
-/**
- * Wire models that carry a quota, in dashboard order.
- *
- * `IT-Portal` is the portal's default route and is absent from the dashboard's
- * quota selector, so it is deliberately excluded rather than reported as zero.
- */
+/** Wire models that carry a quota, in dashboard order. */
 export const QUOTA_MODELS = Object.freeze(
-  MODELS
-    .filter(entry => entry.wire !== 'IT-Portal')
-    .map(entry => Object.freeze({
-      wire: entry.wire,
-      label: entry.name,
-    })),
+  MODELS.map(entry => Object.freeze({
+    wire: entry.wire,
+    label: entry.name,
+  })),
 )
 
 /** Pause between per-model requests, so one refresh never looks like a burst. */
@@ -58,9 +51,8 @@ export function normalizeQuota(payload, requestedModel) {
   const listed = catalog.find(entry => entry.wire === requestedModel)
   const quota = positiveNumber(payload.quota)
   const quotaLeft = positiveNumber(payload.quotaLeft)
-  // The portal lists the models it meters. A model absent from that list — the
-  // default `IT-Portal` route, say — has no allowance to report, which is not
-  // the same fact as an unlimited one.
+  // The portal lists the models it meters. A model absent from that list has
+  // no allowance to report, which is not the same fact as an unlimited one.
   const metered = listed !== undefined
   return {
     model: requestedModel,

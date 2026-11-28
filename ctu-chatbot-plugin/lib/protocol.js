@@ -139,11 +139,33 @@ export async function openConversation({
     const denied = accessDeniedFailure(parsed)
     if (denied !== undefined) throw denied
 
-    if (status === 'showdisclaimer' || status === 'newUser') {
+    if (status === 'showdisclaimer') {
+      // The portal keeps reporting `showdisclaimer` on `getchathistory` even
+      // after the acknowledgement (it is the page's "show the modal" flag, not
+      // a gate). Posting `agreeandproceed` is what enables the conversation;
+      // do not expect the next history call to change status.
+      if (!acceptDisclaimer) throw disclaimerFailure(status)
+      await acknowledge({
+        endpoint: 'agreeandproceed',
+        baseURL,
+        cookie,
+        id,
+        model,
+        style,
+        sessionOnly,
+        signal,
+      })
+      return { ...parsed, status: 'success' }
+    }
+
+    if (status === 'newUser') {
+      // A first-time account gets the disclaimer, then the page creates the
+      // user record. Re-read the history afterwards so a following
+      // `showdisclaimer` can be acknowledged too.
       if (!acceptDisclaimer) throw disclaimerFailure(status)
       if (attempt === 2) throw disclaimerFailure(status, true)
       await acknowledge({
-        endpoint: status === 'showdisclaimer' ? 'agreeandproceed' : 'createnewuser',
+        endpoint: 'createnewuser',
         baseURL,
         cookie,
         id,
@@ -159,7 +181,7 @@ export async function openConversation({
   }
   // The loop either returns, throws, or exhausts its attempts on a status the
   // portal keeps repeating; the last attempt throws above.
-  throw disclaimerFailure('showdisclaimer', true)
+  throw disclaimerFailure('newUser', true)
 }
 
 /**

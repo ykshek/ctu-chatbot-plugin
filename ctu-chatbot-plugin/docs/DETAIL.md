@@ -47,15 +47,22 @@ browser tab, the answer stream carries its "another active Chatbot session"
 text; the plugin reports that as `INVALID_REQUEST` with a message telling you to
 close the other tab, and does not fight the portal for the session.
 
-A first-time account (or one that has not accepted the current terms) gets
-`status: "showdisclaimer"` (or `"newUser"`) instead of a working conversation.
-By default the plugin reports that as `INVALID_REQUEST` and asks you to accept
-the disclaimer once at `https://www.cityu.edu.hk/portal/category/5`. To let the
-plugin post the acknowledgement for you, turn on **Accept the portal's GenAI
-disclaimer automatically** on the plugin's page, under **Portal session**. The
-switch writes the `acceptDisclaimer` option below. Saving it restarts the
-provider so the adapter reads the new value; a headless profile sets the option
-in configuration instead.
+The portal reports `status: "showdisclaimer"` on `getchathistory` for **every
+new conversation**, even for an account that already accepted the disclaimer on
+the website — it is the page's "show the modal" flag, not a stored consent
+flag. The page then posts `agreeandproceed` for that conversation, which is what
+actually enables it; the next history read may still report `showdisclaimer`.
+
+The plugin mirrors that: with `acceptDisclaimer: true` it posts
+`agreeandproceed` and continues; with the default `false` it reports
+`INVALID_REQUEST` and asks you to accept the disclaimer at
+`https://www.cityu.edu.hk/portal/category/5` (or to enable the switch). Turn on
+**Accept the portal's GenAI disclaimer automatically** on the plugin's page,
+under **Portal session**, to let the plugin post the acknowledgement. The switch
+writes the `acceptDisclaimer` option below. Saving it restarts the provider so
+the adapter reads the new value; a headless profile sets the option in
+configuration instead. `newUser` is handled the same way with `createnewuser`,
+after which the history is read once more.
 
 ## Models
 
@@ -63,7 +70,6 @@ The portal's model selector values are exposed as harness model ids:
 
 | Harness model id | Portal `model` | Backend |
 | --- | --- | --- |
-| `ctu-it-portal` | `IT-Portal` | legacy IT knowledge-base route (not in the GenAI selector; kept for compatibility) |
 | `ctu-gpt5-mini` | `GPTmini` | GPT-5 mini |
 | `ctu-gpt5` | `GPT` | GPT-5.2 |
 | `ctu-dsv4` | `DSV4` | DeepSeek V4 Flash |

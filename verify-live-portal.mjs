@@ -11,7 +11,10 @@
  * Run:  CTU_PORTAL_COOKIE='<cookie header>' node verify-live-portal.mjs
  *
  * Note: makes one real chat request (consumes a little quota, opens a
- * conversation on the portal).
+ * conversation on the portal). It sets `acceptDisclaimer: true` because the
+ * portal returns `showdisclaimer` on every new conversation, even for an
+ * account that accepted it on the website; the page's `agreeandproceed` call
+ * is what enables the conversation.
  */
 
 import { CtuPortalAdapter } from './ctu-chatbot-plugin/lib/adapter.js'
@@ -21,6 +24,7 @@ import { resolveOptions } from './ctu-chatbot-plugin/lib/config.js'
 // endpoint, so this stays correct as options are added.
 const adapter = new CtuPortalAdapter(resolveOptions({
   cookieEnv: 'CTU_PORTAL_COOKIE', // cookie stays empty, so it is read from the environment
+  acceptDisclaimer: true,
 }))
 
 console.log('adapter.sessionId (should be a UUID):', adapter.sessionId)
